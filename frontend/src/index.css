@@ -1,0 +1,10 @@
+@import "tailwindcss";
+
+body {
+  @apply bg-slate-950 text-slate-300 font-sans antialiased;
+  /* Subtle grid background for tech vibe */
+  background-image: linear-gradient(to right, #1e293b 1px, transparent 1px),
+                    linear-gradient(to bottom, #1e293b 1px, transparent 1px);
+  background-size: 40px 40px;
+  background-position: center;
+}
