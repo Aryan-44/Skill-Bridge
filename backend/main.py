@@ -8,10 +8,16 @@ import llm_utils
 
 app = FastAPI(title="Skill-Bridge Backend")
 
-# ... (CORS Setup remains same) ...
+# CORS Setup: allow local dev ports and optionally override via ALLOW_ORIGINS env var
+allow_origins_env = os.getenv("ALLOW_ORIGINS")
+if allow_origins_env:
+    allow_origins = [o.strip() for o in allow_origins_env.split(",") if o.strip()]
+else:
+    allow_origins = ["http://localhost:5173", "http://localhost:5174","https://dev-skill-bridge.netlify.app"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"], # Standard Vite Port
+    allow_origins=allow_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -45,6 +51,7 @@ async def analyze_document(file: UploadFile = File(...)):
     3. Calls LLM (OpenAI/Groq) for Analysis.
     """
     # 1. Read File
+    print(f"[ANALYZE] Received file: {file.filename}")
     if file.filename.endswith(".pdf"):
         text = llm_utils.extract_text_from_pdf(file.file)
     else:
