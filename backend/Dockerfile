@@ -15,8 +15,8 @@ COPY . .
 
 # Expose the port that uvicorn will run on
 # Railway dynamically assigns a port, but exposing 8000 is a good default documentation
-EXPOSE 8000
+EXPOSE 8080
 
 # Run the application
 # We use shell form to allow variable expansion for $PORT
-CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080}"]
