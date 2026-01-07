@@ -35,7 +35,7 @@ export default function Profile() {
 
             // 2. Trigger Backup Email Notification via Backend
             try {
-                await axios.post('http://localhost:8000/send-email', {
+                await axios.post('https://skill-bridge-production-6872.up.railway.app/send-email', {
                     to_email: userData.email,
                     subject: `Skill-Bridge: ${currentUser.displayName} wants to connect!`,
                     body: `Hi ${userData.name},\n\n${currentUser.displayName} found your profile on Skill-Bridge and sent you a connection request.\n\nCheck your notifications in the app.`
@@ -142,8 +142,8 @@ export default function Profile() {
                                             onClick={handleConnect}
                                             disabled={requestStatus === 'sent' || requestStatus === 'sending'}
                                             className={`px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-all ${requestStatus === 'sent'
-                                                    ? 'bg-green-500/20 text-green-400 border border-green-500/30 cursor-default'
-                                                    : 'bg-blue-600 hover:bg-blue-700 text-white shadow-lg shadow-blue-500/20'
+                                                ? 'bg-green-500/20 text-green-400 border border-green-500/30 cursor-default'
+                                                : 'bg-blue-600 hover:bg-blue-700 text-white shadow-lg shadow-blue-500/20'
                                                 }`}
                                         >
                                             {requestStatus === 'sending' ? (

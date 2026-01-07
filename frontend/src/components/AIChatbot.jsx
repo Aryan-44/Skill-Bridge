@@ -36,7 +36,7 @@ export default function AIChatbot() {
                 parts: [m.text]
             }));
 
-            const response = await axios.post('http://127.0.0.1:8000/ai-chat', {
+            const response = await axios.post('https://skill-bridge-production-6872.up.railway.app/ai-chat', {
                 message: userMsg.text,
                 history: history
             });
@@ -76,8 +76,8 @@ export default function AIChatbot() {
                             {messages.map((msg, idx) => (
                                 <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                                     <div className={`max-w-[85%] p-3 rounded-2xl text-sm ${msg.role === 'user'
-                                            ? 'bg-blue-600 text-white rounded-br-none'
-                                            : 'bg-slate-800 text-slate-300 border border-white/5 rounded-bl-none'
+                                        ? 'bg-blue-600 text-white rounded-br-none'
+                                        : 'bg-slate-800 text-slate-300 border border-white/5 rounded-bl-none'
                                         }`}>
                                         {msg.text}
                                     </div>
