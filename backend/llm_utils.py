@@ -20,6 +20,8 @@ print(f"LLM Config: Model={model_name}, BaseURL={base_url}")
 if not api_key:
     print("CRITICAL ERROR: OPENAI_API_KEY is missing or empty.")
 
+client = OpenAI(
+    api_key=api_key,
     base_url=base_url
 )
 
