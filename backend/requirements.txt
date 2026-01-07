@@ -7,3 +7,4 @@ pypdf2
 pydantic
 python-dotenv
 numpy
+openai
