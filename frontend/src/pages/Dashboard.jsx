@@ -9,7 +9,7 @@ import { db } from '../firebaseConfig';
 import { doc, setDoc, collection, getDocs } from 'firebase/firestore';
 import Navbar from '../components/Navbar';
 
-const API_URL = "https://skill-bridge-production-6872.up.railway.app";
+const API_URL = "https://skill-bridge-production-f14a.up.railway.app";
 
 export default function Dashboard() {
     const { currentUser } = useAuth();

@@ -36,7 +36,7 @@ export default function AIChatbot() {
                 parts: [m.text]
             }));
 
-            const response = await axios.post('https://skill-bridge-production-6872.up.railway.app/ai-chat', {
+            const response = await axios.post('https://skill-bridge-production-f14a.up.railway.app/ai-chat', {
                 message: userMsg.text,
                 history: history
             });
