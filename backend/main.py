@@ -9,11 +9,17 @@ import llm_utils
 app = FastAPI(title="Skill-Bridge Backend")
 
 # CORS Setup: allow local dev ports and optionally override via ALLOW_ORIGINS env var
-allow_origins_env = os.getenv("ALLOW_ORIGINS")
-if allow_origins_env:
-    allow_origins = [o.strip() for o in allow_origins_env.split(",") if o.strip()]
-else:
-    allow_origins = ["http://localhost:5173", "http://localhost:5174","https://dev-skill-bridge.netlify.app"]
+allow_origins = [
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "https://dev-skill-bridge.netlify.app",
+]
+
+extra_origins = os.getenv("ALLOW_ORIGINS")
+if extra_origins:
+    allow_origins.extend(
+        [o.strip() for o in extra_origins.split(",") if o.strip()]
+    )
 
 app.add_middleware(
     CORSMiddleware,
