@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { MessageCircle, X, Send, Bot, Sparkles } from 'lucide-react';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
+import API_URL from '../config';
 
 export default function AIChatbot() {
     const [isOpen, setIsOpen] = useState(false);
@@ -36,7 +37,7 @@ export default function AIChatbot() {
                 parts: [m.text]
             }));
 
-            const response = await axios.post('https://skill-bridge-production-f14a.up.railway.app/ai-chat', {
+            const response = await axios.post(`${API_URL}/ai-chat`, {
                 message: userMsg.text,
                 history: history
             });

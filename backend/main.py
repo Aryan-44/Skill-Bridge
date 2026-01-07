@@ -13,6 +13,7 @@ allow_origins = [
     "http://localhost:5173",
     "http://localhost:5174",
     "https://dev-skill-bridge.netlify.app",
+    "https://skill-bridge-coral.vercel.app",
 ]
 
 extra_origins = os.getenv("ALLOW_ORIGINS")
