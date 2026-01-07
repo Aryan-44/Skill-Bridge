@@ -1,6 +1,7 @@
 import os
 import PyPDF2
 from openai import OpenAI
+import google.generativeai as genai
 import json
 import numpy as np
 from dotenv import load_dotenv
@@ -19,10 +20,31 @@ print(f"LLM Config: Model={model_name}, BaseURL={base_url}")
 if not api_key:
     print("CRITICAL ERROR: OPENAI_API_KEY is missing or empty.")
 
-client = OpenAI(
-    api_key=api_key,
     base_url=base_url
 )
+
+# Configure Gemini for Embeddings
+gemini_metrics_key = os.getenv("GEMINI_API_KEY")
+if gemini_metrics_key:
+    genai.configure(api_key=gemini_metrics_key)
+else:
+    print("WARNING: GEMINI_API_KEY missing. Embeddings will not work.")
+
+def get_gemini_embedding(text: str):
+    """Generates embedding using Gemini text-embedding-004 model."""
+    if not text or not gemini_metrics_key:
+        return []
+    try:
+        # text-embedding-004 is the latest optimized model
+        result = genai.embed_content(
+            model="models/text-embedding-004",
+            content=text,
+            task_type="retrieval_document"
+        )
+        return result['embedding']
+    except Exception as e:
+        print(f"Embedding Error: {e}")
+        return []
 
 # Dummy embedding function since Groq might not support embeddings or uses different setup.
 # For now, we will SKIP embeddings or use a placeholder if not critical for simple search.
@@ -95,7 +117,7 @@ async def analyze_with_gemini(text_content: str) -> dict:
         analysis_json["summary"] = f"Analysis Failed: {str(e)}"
 
     # Embeddings - Skipping for now or stubbing
-    embedding_vector = []
+    embedding_vector = get_gemini_embedding(str(analysis_json))
 
     return {
         "analysis": analysis_json,

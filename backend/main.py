@@ -90,7 +90,8 @@ async def vectorize_query(search: SearchQuery):
     Note: Groq typically doesn't support embeddings. Returning empty or using placeholder.
     """
     # For now, return empty vector to avoid breaking frontend
-    return {"embedding": []}
+    embedding = llm_utils.get_gemini_embedding(search.query_text)
+    return {"embedding": embedding}
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8080, reload=True)
