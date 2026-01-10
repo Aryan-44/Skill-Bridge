@@ -135,28 +135,64 @@ export default function Dashboard() {
     const handleSearch = async () => {
         if (!searchQuery) return;
         setSearching(true);
+        setSearchResults([]); // Clear previous results immediately
+
         try {
-            // 1. Get Embedding for Query from Backend
-            const embedRes = await axios.post(`${API_URL}/vectorize`, { query_text: searchQuery, limit: 10 });
+            // 1. Get Embedding for the Search Query
+            const embedRes = await axios.post(`${API_URL}/vectorize`, { query_text: searchQuery, limit: 1 });
             const queryVector = embedRes.data.embedding;
 
-            // 2. Fetch ALL profiles from Firestore
+            // 2. Fetch all users
             const querySnapshot = await getDocs(collection(db, "users"));
-
             const matches = [];
+
+            // --- CONFIGURATION ---
+            const MIN_SCORE_TO_SHOW = 0.65; // Matches below 65% won't show at all
+            const NAME_MATCH_BOOST = 1.0;   // Boost for exact name match
+            const KEYWORD_MATCH_BOOST = 0.5; // Boost for skill/role match
+
             querySnapshot.forEach((doc) => {
                 const userData = doc.data();
-                if (userData.embedding && userData.user_id !== currentUser?.uid) {
-                    const score = cosineSimilarity(queryVector, userData.embedding);
+                if (userData.user_id === currentUser?.uid) return; // Skip self
+
+                // Prepare strings for comparison
+                const q = searchQuery.toLowerCase().trim();
+                const uName = (userData.name || "").toLowerCase();
+                const uRole = (userData.role || "").toLowerCase();
+                const uSkills = (userData.skills || []).join(" ").toLowerCase();
+
+                // --- A. CALCULATE BASE VECTOR SCORE ---
+                // (If user has no embedding, score is 0)
+                let score = userData.embedding
+                    ? cosineSimilarity(queryVector, userData.embedding)
+                    : 0;
+
+                // --- B. APPLY STRING MATCHING BOOSTS ---
+
+                // Priority 1: DIRECT NAME MATCH (Partial or Full)
+                // e.g., Searching "Push" finds "Pushpa"
+                if (uName.includes(q)) {
+                    score = 1.0; // Force max score. This creates a "Perfect Match"
+                }
+                // Priority 2: ROLE OR SKILL MATCH
+                // e.g., Searching "React" finds "React Developer"
+                else if (uRole.includes(q) || uSkills.includes(q)) {
+                    score += KEYWORD_MATCH_BOOST;
+                }
+
+                // --- C. FILTERING ---
+                // Only add to results if the final score is relevant
+                if (score >= MIN_SCORE_TO_SHOW) {
                     matches.push({
                         ...userData,
-                        score: score
+                        score: score > 1 ? 1 : score // Cap score at 100%
                     });
                 }
             });
 
-            // 3. Sort by Score
+            // 3. Sort Results (Highest Score First)
             matches.sort((a, b) => b.score - a.score);
+
             setSearchResults(matches.slice(0, 5));
 
         } catch (err) {
@@ -165,7 +201,6 @@ export default function Dashboard() {
             setSearching(false);
         }
     };
-
     // --- UI Components ---
 
     return (
