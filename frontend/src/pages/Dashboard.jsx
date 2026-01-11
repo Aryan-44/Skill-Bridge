@@ -135,62 +135,64 @@ export default function Dashboard() {
     const handleSearch = async () => {
         if (!searchQuery) return;
         setSearching(true);
-        setSearchResults([]); // Clear previous results immediately
+        setSearchResults([]); // Clear old results
 
         try {
-            // 1. Get Embedding for the Search Query
+            // 1. Get Embedding for the Query
             const embedRes = await axios.post(`${API_URL}/vectorize`, { query_text: searchQuery, limit: 1 });
             const queryVector = embedRes.data.embedding;
 
-            // 2. Fetch all users
+            // 2. Fetch Users
             const querySnapshot = await getDocs(collection(db, "users"));
             const matches = [];
 
             // --- CONFIGURATION ---
-            const MIN_SCORE_TO_SHOW = 0.65; // Matches below 65% won't show at all
-            const NAME_MATCH_BOOST = 1.0;   // Boost for exact name match
-            const KEYWORD_MATCH_BOOST = 0.5; // Boost for skill/role match
+            // Lower the threshold slightly to allow "fuzzy" AI matches to pass
+            const MIN_SCORE_TO_SHOW = 0.35;
 
             querySnapshot.forEach((doc) => {
                 const userData = doc.data();
                 if (userData.user_id === currentUser?.uid) return; // Skip self
 
-                // Prepare strings for comparison
+                // 3. Prepare Data for Comparison
                 const q = searchQuery.toLowerCase().trim();
                 const uName = (userData.name || "").toLowerCase();
                 const uRole = (userData.role || "").toLowerCase();
-                const uSkills = (userData.skills || []).join(" ").toLowerCase();
+                // Join array into a single string for easy searching: "react nodejs python"
+                const uSkills = Array.isArray(userData.skills)
+                    ? userData.skills.join(" ").toLowerCase()
+                    : (userData.skills || "").toLowerCase();
 
-                // --- A. CALCULATE BASE VECTOR SCORE ---
-                // (If user has no embedding, score is 0)
-                let score = userData.embedding
+                // 4. Calculate Base AI Score (Vector Similarity)
+                let finalScore = userData.embedding
                     ? cosineSimilarity(queryVector, userData.embedding)
                     : 0;
 
-                // --- B. APPLY STRING MATCHING BOOSTS ---
+                // 5. APPLY "WATERFALL" BOOSTING
 
-                // Priority 1: DIRECT NAME MATCH (Partial or Full)
-                // e.g., Searching "Push" finds "Pushpa"
+                // CASE A: EXACT NAME MATCH (Highest Priority)
                 if (uName.includes(q)) {
-                    score = 1.0; // Force max score. This creates a "Perfect Match"
+                    finalScore = 1.0; // Perfect match
                 }
-                // Priority 2: ROLE OR SKILL MATCH
-                // e.g., Searching "React" finds "React Developer"
+                // CASE B: SKILL OR ROLE MATCH (High Priority)
+                // If the user searches "React" and the profile has "React", we FORCE the score up.
                 else if (uRole.includes(q) || uSkills.includes(q)) {
-                    score += KEYWORD_MATCH_BOOST;
+                    // If the AI gave a low score (e.g., 0.2), we boost it to at least 0.8
+                    // If the AI gave a high score (e.g., 0.7), we add a little bonus (+0.2)
+                    finalScore = Math.max(finalScore + 0.3, 0.8);
                 }
 
-                // --- C. FILTERING ---
-                // Only add to results if the final score is relevant
-                if (score >= MIN_SCORE_TO_SHOW) {
+                // 6. FILTER & SAVE
+                // Only show if the final score (after boosting) is good enough
+                if (finalScore >= MIN_SCORE_TO_SHOW) {
                     matches.push({
                         ...userData,
-                        score: score > 1 ? 1 : score // Cap score at 100%
+                        score: finalScore > 1 ? 1 : finalScore // Cap at 1.0
                     });
                 }
             });
 
-            // 3. Sort Results (Highest Score First)
+            // 7. Sort: Highest score (1.0) goes first
             matches.sort((a, b) => b.score - a.score);
 
             setSearchResults(matches.slice(0, 5));
