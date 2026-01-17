@@ -1,7 +1,7 @@
 fastapi
 uvicorn
 firebase-admin
-google-generativeai
+
 python-multipart
 pypdf2
 pydantic
