@@ -87,9 +87,9 @@ async def vectorize_query(search: SearchQuery):
     """
     Helper endpoint for Client-Side Search.
     Returns the embedding vector for a text query.
-    Now uses Local SentenceTransformer (Unlimited).
+    Now uses Hugging Face API (Free & Lightweight).
     """
-    embedding = llm_utils.get_local_embedding(search.query_text)
+    embedding = llm_utils.get_hf_embedding(search.query_text)
     return {"embedding": embedding}
 
 if __name__ == "__main__":

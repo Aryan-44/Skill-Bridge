@@ -1,9 +1,8 @@
 import os
 import PyPDF2
 from openai import OpenAI
-from sentence_transformers import SentenceTransformer
+import requests
 import json
-import numpy as np
 from dotenv import load_dotenv
 
 load_dotenv(override=True)
@@ -12,6 +11,11 @@ load_dotenv(override=True)
 api_key = os.getenv("OPENAI_API_KEY", "")
 base_url = os.getenv("OPENAI_BASE_URL", "https://api.groq.com/openai/v1")
 model_name = os.getenv("LLM_MODEL_NAME", "llama-3.3-70b-versatile")
+hf_api_key = os.getenv("HF_API_KEY", "")
+
+# 2. Configure HF API
+HF_API_URL = "https://api-inference.huggingface.co/models/sentence-transformers/all-MiniLM-L6-v2"
+hf_headers = {"Authorization": f"Bearer {hf_api_key}"}
 
 print(f"LLM Config: Model={model_name}, BaseURL={base_url}")
 
@@ -23,27 +27,25 @@ client = OpenAI(
     base_url=base_url
 )
 
-# 2. Configure Local Embeddings (SentenceTransformer)
-# This downloads the model (~80MB) on first run and caches it.
-print("Loading Local Embedding Model (all-MiniLM-L6-v2)...")
-try:
-    embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-    print("✅ Local Embedding Model Loaded Successfully.")
-except Exception as e:
-    print(f"❌ Failed to load embedding model: {e}")
-    embedding_model = None
-
-def get_local_embedding(text: str):
-    """Generates embedding using local CPU model (Free & Unlimited)."""
-    if not text or not embedding_model:
+def get_hf_embedding(text: str):
+    """Generates embedding using Hugging Face Inference API (Free & Lightweight)."""
+    if not text or not hf_api_key:
+        print("Embedding Error: Missing text or HF_API_KEY")
         return []
+    
     try:
-        # Generate embedding
-        embedding = embedding_model.encode(text)
-        # Convert numpy array to list for JSON serialization
-        return embedding.tolist()
+        payload = {"inputs": text}
+        response = requests.post(HF_API_URL, headers=hf_headers, json=payload)
+        
+        if response.status_code == 200:
+            # HF API returns a list of embeddings (we sent 1 input)
+            return response.json() 
+        else:
+            print(f"HF API Error {response.status_code}: {response.text}")
+            return []
+            
     except Exception as e:
-        print(f"Embedding Error: {e}")
+        print(f"Embedding Network Error: {e}")
         return []
 
 def extract_text_from_pdf(file_stream) -> str:
@@ -98,7 +100,7 @@ async def analyze_document(text_content: str) -> dict:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message}
             ],
-            response_format={"type": "json_object"} # Groq supports this for Llama 3
+            response_format={"type": "json_object"} 
         )
         
         content = response.choices[0].message.content
@@ -109,8 +111,9 @@ async def analyze_document(text_content: str) -> dict:
         print(f"Analysis Error: {e}")
         analysis_json["summary"] = f"Analysis Failed: {str(e)}"
 
-    # Generate Embedding locally
-    embedding_vector = get_local_embedding(str(analysis_json))
+    # Generate Embedding using HF API
+    # Note: Using json.dumps to ensure it's a string, covering edge cases
+    embedding_vector = get_hf_embedding(json.dumps(analysis_json))
 
     return {
         "analysis": analysis_json,
@@ -120,8 +123,6 @@ async def analyze_document(text_content: str) -> dict:
 def chat_with_bot(history, message):
     """
     Chat wrapper for OpenAI/Groq.
-    History comes in as [{'role': 'user'/'model', 'parts': ['text']}] (Gemini format).
-    We must convert to OpenAI format: [{'role': 'user'/'assistant', 'content': 'text'}]
     """
     try:
         # 1. Convert History
@@ -133,7 +134,6 @@ def chat_with_bot(history, message):
 
         for msg in history:
             role = 'assistant' if msg['role'] == 'model' else 'user'
-            # 'parts' is a list in Gemini, OpenAI expects string content
             content = " ".join(msg.get('parts', [])) if isinstance(msg.get('parts'), list) else str(msg.get('parts', ''))
             openai_history.append({"role": role, "content": content})
         
