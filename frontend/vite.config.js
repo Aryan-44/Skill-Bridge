@@ -9,4 +9,8 @@ export default defineConfig({
       'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
     },
   },
+  build: {
+    sourcemap: false, // Disabling source maps to save memory
+    chunkSizeWarningLimit: 1000, 
+  }
 })
