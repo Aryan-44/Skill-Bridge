@@ -69,7 +69,7 @@ async def analyze_document(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="Could not extract text. File might be empty or image-based.")
 
     # 2. Analyze
-    result = await llm_utils.analyze_with_gemini(text)
+    result = await llm_utils.analyze_document(text) # Updated function name
     
     return {
         "status": "success",
@@ -87,10 +87,9 @@ async def vectorize_query(search: SearchQuery):
     """
     Helper endpoint for Client-Side Search.
     Returns the embedding vector for a text query.
-    Note: Groq typically doesn't support embeddings. Returning empty or using placeholder.
+    Now uses Local SentenceTransformer (Unlimited).
     """
-    # For now, return empty vector to avoid breaking frontend
-    embedding = llm_utils.get_gemini_embedding(search.query_text)
+    embedding = llm_utils.get_local_embedding(search.query_text)
     return {"embedding": embedding}
 
 if __name__ == "__main__":

@@ -1,16 +1,14 @@
 import os
 import PyPDF2
 from openai import OpenAI
-import google.generativeai as genai
+from sentence_transformers import SentenceTransformer
 import json
 import numpy as np
 from dotenv import load_dotenv
-import datetime
-import time
 
 load_dotenv(override=True)
 
-# Configure OpenAI (compatible with Groq)
+# 1. Configure LLM (Groq)
 api_key = os.getenv("OPENAI_API_KEY", "")
 base_url = os.getenv("OPENAI_BASE_URL", "https://api.groq.com/openai/v1")
 model_name = os.getenv("LLM_MODEL_NAME", "llama-3.3-70b-versatile")
@@ -25,34 +23,28 @@ client = OpenAI(
     base_url=base_url
 )
 
-# Configure Gemini for Embeddings
-gemini_metrics_key = os.getenv("GEMINI_API_KEY")
-if gemini_metrics_key:
-    genai.configure(api_key=gemini_metrics_key)
-else:
-    print("WARNING: GEMINI_API_KEY missing. Embeddings will not work.")
+# 2. Configure Local Embeddings (SentenceTransformer)
+# This downloads the model (~80MB) on first run and caches it.
+print("Loading Local Embedding Model (all-MiniLM-L6-v2)...")
+try:
+    embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+    print("✅ Local Embedding Model Loaded Successfully.")
+except Exception as e:
+    print(f"❌ Failed to load embedding model: {e}")
+    embedding_model = None
 
-def get_gemini_embedding(text: str):
-    """Generates embedding using Gemini text-embedding-004 model."""
-    if not text or not gemini_metrics_key:
+def get_local_embedding(text: str):
+    """Generates embedding using local CPU model (Free & Unlimited)."""
+    if not text or not embedding_model:
         return []
     try:
-        # text-embedding-004 is the latest optimized model
-        result = genai.embed_content(
-            model="models/text-embedding-004",
-            content=text,
-            task_type="retrieval_document"
-        )
-        return result['embedding']
+        # Generate embedding
+        embedding = embedding_model.encode(text)
+        # Convert numpy array to list for JSON serialization
+        return embedding.tolist()
     except Exception as e:
         print(f"Embedding Error: {e}")
         return []
-
-# Dummy embedding function since Groq might not support embeddings or uses different setup.
-# For now, we will SKIP embeddings or use a placeholder if not critical for simple search.
-# OR we can keep using Gemini for embeddings if the key is still there?
-# The user wants to switch 'llm from gemini to grok'. Usually specific to Chat/Generation.
-# We will disable embeddings for now or return empty to avoid errors.
 
 def extract_text_from_pdf(file_stream) -> str:
     """Reads text from an uploaded PDF stream."""
@@ -66,9 +58,8 @@ def extract_text_from_pdf(file_stream) -> str:
         print(f"PDF Error: {e}")
         return ""
 
-async def analyze_with_gemini(text_content: str) -> dict:
+async def analyze_document(text_content: str) -> dict:
     """
-    Renamed conceptually, but kept function name for compatibility if main.py imports it.
     Uses OpenAI/Groq for analysis.
     """
     
@@ -118,16 +109,13 @@ async def analyze_with_gemini(text_content: str) -> dict:
         print(f"Analysis Error: {e}")
         analysis_json["summary"] = f"Analysis Failed: {str(e)}"
 
-    # Embeddings - Skipping for now or stubbing
-    embedding_vector = get_gemini_embedding(str(analysis_json))
+    # Generate Embedding locally
+    embedding_vector = get_local_embedding(str(analysis_json))
 
     return {
         "analysis": analysis_json,
         "embedding": embedding_vector
     }
-
-def calculate_cosine_similarity(vec_a, vec_b):
-    return 0.0 # Disabled
 
 def chat_with_bot(history, message):
     """
