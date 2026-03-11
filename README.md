@@ -49,7 +49,6 @@ Skill-Bridge replaces "claimed skills" with **demonstrated expertise**. By analy
     ```
 
 ## 👥 Team ARJUNA
-* **K. Naga Aryan Kumar Reddy** - Team Leader
 * **Project Link:** [Skill-Bridge MVP](https://dev-skill-bridge.netlify.app/)
 
 ---
