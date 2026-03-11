@@ -1,4 +1,4 @@
-# Skill-Bridge 🚀
+# Skill-Bridge 
 **Bridge the Gap Between Talent and Collaboration**
 
 [![Live MVP](https://img.shields.io/badge/Live-MVP-brightgreen)](https://dev-skill-bridge.netlify.app/)
