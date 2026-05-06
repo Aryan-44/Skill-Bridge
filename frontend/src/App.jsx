@@ -76,6 +76,8 @@ function App() {
                   </PrivateRoute>
                 }
               />
+              {/* Catch-all route to redirect unknown paths to dashboard */}
+              <Route path="*" element={<Navigate to="/dashboard" replace />} />
             </Routes>
 
             {/* Global Chatbot Floating Button */}

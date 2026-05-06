@@ -3,7 +3,7 @@ import axios from 'axios';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Calendar, PlayCircle, Sparkles, User, Video, UserPlus, CheckCircle, XCircle } from 'lucide-react';
+import { Calendar, PlayCircle, Sparkles, User, Video, UserPlus, CheckCircle, XCircle, Search } from 'lucide-react';
 import { db } from '../firebaseConfig';
 import { addDoc, arrayUnion, collection, doc, getDoc, getDocs, serverTimestamp, updateDoc } from 'firebase/firestore';
 import Navbar from '../components/Navbar';
@@ -23,6 +23,10 @@ export default function Dashboard() {
     const [sendingRequestIds, setSendingRequestIds] = useState([]);
     const [incomingRequestsBySender, setIncomingRequestsBySender] = useState({});
     const [processingIncomingIds, setProcessingIncomingIds] = useState([]);
+    const [allUsers, setAllUsers] = useState([]);
+    const [searchQuery, setSearchQuery] = useState('');
+    const [searchResults, setSearchResults] = useState([]);
+    const [isSearching, setIsSearching] = useState(false);
     const [expForm, setExpForm] = useState({ hackathon_name: '', journey: '', challenges: '', how_overcome: '', tips: '', video_url: '' });
     const [eventForm, setEventForm] = useState({ title: '', college_name: '', event_type: 'Hackathon', description: '', date: '', location: '', registration_link: '', poster_url: '', video_url: '', contact_note: '' });
 
@@ -59,8 +63,9 @@ export default function Dashboard() {
                 setFeedItems(mixed);
 
                 const usersSnap = await getDocs(collection(db, "users"));
-                const allUsers = [];
-                usersSnap.forEach((d) => allUsers.push(d.data()));
+                const usersList = [];
+                usersSnap.forEach((d) => usersList.push(d.data()));
+                setAllUsers(usersList);
                 const reqSnap = await getDocs(collection(db, "requests"));
                 const allReqs = reqSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
                 const pendingOutgoing = allReqs
@@ -92,7 +97,7 @@ export default function Dashboard() {
                 };
                 const desired = complements[myTrack] || complements.general;
 
-                const suggestions = allUsers
+                const suggestions = usersList
                     .filter((u) => u.user_id && u.user_id !== currentUser.uid)
                     .map((u) => {
                         const role = (u.role || '').toLowerCase();
@@ -114,13 +119,17 @@ export default function Dashboard() {
     }, [currentUser]);
 
     const refreshFeed = async () => {
-        const [expRes, eventRes] = await Promise.all([
-            axios.get(`${API_URL}/community/experiences`),
-            axios.get(`${API_URL}/community/events`)
-        ]);
-        const experiences = (expRes.data || []).map((item) => ({ ...item, itemType: "experience", feedTs: new Date(item.timestamp || 0).getTime() }));
-        const events = (eventRes.data || []).map((item) => ({ ...item, itemType: "event", feedTs: new Date(item.timestamp || 0).getTime() }));
-        setFeedItems([...experiences, ...events].sort((a, b) => b.feedTs - a.feedTs));
+        try {
+            const [expRes, eventRes] = await Promise.all([
+                axios.get(`${API_URL}/community/experiences`),
+                axios.get(`${API_URL}/community/events`)
+            ]);
+            const experiences = (expRes.data || []).map((item) => ({ ...item, itemType: "experience", feedTs: new Date(item.timestamp || 0).getTime() }));
+            const events = (eventRes.data || []).map((item) => ({ ...item, itemType: "event", feedTs: new Date(item.timestamp || 0).getTime() }));
+            setFeedItems([...experiences, ...events].sort((a, b) => b.feedTs - a.feedTs));
+        } catch (err) {
+            console.error("Failed to refresh feed:", err);
+        }
     };
 
     const handleIncomingAction = async (senderId, action) => {
@@ -205,6 +214,52 @@ export default function Dashboard() {
         }
     };
 
+    const cosineSimilarity = (vecA, vecB) => {
+        if (!vecA || !vecB || vecA.length === 0 || vecA.length !== vecB.length) return 0;
+        let dotProduct = 0;
+        let normA = 0;
+        let normB = 0;
+        for (let i = 0; i < vecA.length; i++) {
+            dotProduct += vecA[i] * vecB[i];
+            normA += vecA[i] * vecA[i];
+            normB += vecB[i] * vecB[i];
+        }
+        if (normA === 0 || normB === 0) return 0;
+        return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+    };
+
+    const handleSearch = async (e) => {
+        e.preventDefault();
+        if (!searchQuery.trim()) {
+            setSearchResults([]);
+            setIsSearching(false);
+            return;
+        }
+        setIsSearching(true);
+        try {
+            const res = await axios.post(`${API_URL}/vectorize`, { query_text: searchQuery });
+            const queryVec = res.data.embedding;
+            if (!queryVec || queryVec.length === 0) {
+                setSearchResults([]);
+            } else {
+                const scored = allUsers
+                    .filter(u => u.user_id !== currentUser?.uid && u.embedding && u.embedding.length > 0)
+                    .map(u => ({
+                        ...u,
+                        _score: cosineSimilarity(queryVec, u.embedding)
+                    }))
+                    .sort((a, b) => b._score - a._score)
+                    .filter(u => u._score > 0.1)
+                    .slice(0, 8);
+                setSearchResults(scored);
+            }
+        } catch (err) {
+            console.error("Search failed", err);
+        } finally {
+            setIsSearching(false);
+        }
+    };
+
     return (
         <div className="min-h-screen bg-slate-950 text-slate-300 md:pl-72">
             <Navbar />
@@ -215,9 +270,18 @@ export default function Dashboard() {
                         <div>
                             <p className="text-xs uppercase tracking-[0.25em] text-cyan-300 mb-2">Community Hub</p>
                             <h1 className="text-2xl md:text-3xl font-semibold text-white">Campus Posts, Experiences, and Hackathon Updates</h1>
-                            <p className="text-sm text-slate-300 mt-2 max-w-2xl">
-                                Just like a social feed: discover hackathon posts, watch shared videos, and connect with students ready to participate.
-                            </p>
+                            
+                            <form onSubmit={handleSearch} className="mt-4 relative max-w-md group">
+                                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-cyan-400 transition-colors" size={18} />
+                                <input 
+                                    type="text" 
+                                    placeholder="Search users by skills (e.g. 'React developer')..." 
+                                    value={searchQuery}
+                                    onChange={(e) => setSearchQuery(e.target.value)}
+                                    className="w-full bg-slate-950/50 border border-white/10 rounded-xl py-2.5 pl-10 pr-4 text-sm text-white focus:outline-none focus:border-cyan-500/50 transition-all backdrop-blur-md"
+                                />
+                                {isSearching && <div className="absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-cyan-500">⏳</div>}
+                            </form>
                         </div>
                         <div className="flex gap-2">
                             <button
@@ -236,6 +300,98 @@ export default function Dashboard() {
                     </div>
                 </section>
 
+                {/* Search Results */}
+                {searchResults.length > 0 && (
+                    <section className="mb-10 animate-in fade-in slide-in-from-top-4 duration-500">
+                        <div className="flex justify-between items-center mb-4">
+                            <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                                <Sparkles className="text-cyan-400" size={18} /> Semantic Matches
+                            </h2>
+                            <button onClick={() => {setSearchResults([]); setSearchQuery('');}} className="text-xs text-slate-500 hover:text-white">Clear Results</button>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+                            {searchResults.map((u) => (
+                                <div key={u.user_id} className="rounded-2xl border border-white/10 bg-slate-900/60 p-4 flex flex-col gap-3 hover:border-cyan-500/30 transition-all">
+                                    <div>
+                                        <p className="text-sm text-white font-semibold">{u.name || 'Student'}</p>
+                                        <p className="text-xs text-slate-400 line-clamp-1">{u.role || 'Hackathon enthusiast'}</p>
+                                        <div className="mt-2 flex flex-wrap gap-1">
+                                            {u.skills?.slice(0, 3).map(s => (
+                                                <span key={s} className="text-[9px] px-1.5 py-0.5 rounded bg-white/5 text-slate-300 border border-white/5">{s}</span>
+                                            ))}
+                                        </div>
+                                    </div>
+                                    <div className="flex gap-2 mt-auto">
+                                        <button onClick={() => navigate(`/profile/${u.user_id}`)} className="flex-1 text-xs px-2.5 py-1.5 rounded border border-white/20 text-slate-200 hover:bg-white/10 transition-colors">View</button>
+                                        {!connectedUserIds.includes(u.user_id) && !pendingRequestIds.includes(u.user_id) && (
+                                            <button 
+                                                onClick={() => handleConnectSuggestion(u)} 
+                                                disabled={sendingRequestIds.includes(u.user_id)}
+                                                className="flex-1 text-xs px-2.5 py-1.5 rounded bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50 transition-colors"
+                                            >
+                                                {sendingRequestIds.includes(u.user_id) ? '...' : 'Connect'}
+                                            </button>
+                                        )}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </section>
+                )}
+
+                {/* Always Visible Suggestions */}
+                <section className="mb-8 rounded-2xl border border-blue-500/20 bg-blue-500/10 p-4">
+                    <p className="text-xs uppercase tracking-wider text-blue-300 mb-3 flex items-center gap-1">
+                        <UserPlus size={13} /> Recommended for You
+                    </p>
+                    {suggestedUsers.length === 0 ? (
+                        <p className="text-xs text-slate-400">Complete your profile to get teammate suggestions.</p>
+                    ) : (
+                        <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-thin scrollbar-thumb-white/10">
+                            {suggestedUsers.map((u) => (
+                                <div key={u.user_id} className="min-w-[260px] rounded-xl bg-black/20 border border-white/10 p-3 flex flex-col gap-3">
+                                    <div>
+                                        <p className="text-sm text-white">{u.name || 'Student'}</p>
+                                        <p className="text-[11px] text-slate-400">{u.role || 'Hackathon enthusiast'}</p>
+                                        <p className="text-[10px] text-cyan-300/80 uppercase tracking-wider mt-1">{u._track || 'general'} match</p>
+                                    </div>
+                                    <div className="flex gap-1.5 flex-wrap">
+                                        <button
+                                            onClick={() => navigate(`/profile/${u.user_id}`)}
+                                            className="text-xs px-2.5 py-1.5 rounded border border-white/20 text-slate-200 hover:bg-white/10"
+                                        >
+                                            View
+                                        </button>
+                                        {incomingRequestsBySender[u.user_id] ? (
+                                            <>
+                                                <button
+                                                    onClick={() => handleIncomingAction(u.user_id, 'accepted')}
+                                                    disabled={processingIncomingIds.includes(u.user_id)}
+                                                    className="text-xs px-2.5 py-1.5 rounded bg-green-600 hover:bg-green-700 text-white disabled:opacity-60 flex items-center gap-1"
+                                                >
+                                                    <CheckCircle size={12} /> Accept
+                                                </button>
+                                            </>
+                                        ) : connectedUserIds.includes(u.user_id) ? (
+                                            <span className="text-xs px-2.5 py-1.5 rounded bg-green-600/20 text-green-300 border border-green-500/30">Connected</span>
+                                        ) : pendingRequestIds.includes(u.user_id) ? (
+                                            <span className="text-xs px-2.5 py-1.5 rounded bg-yellow-600/20 text-yellow-300 border border-yellow-500/30">Requested</span>
+                                        ) : (
+                                            <button
+                                                onClick={() => handleConnectSuggestion(u)}
+                                                disabled={sendingRequestIds.includes(u.user_id)}
+                                                className="text-xs px-2.5 py-1.5 rounded bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-60"
+                                            >
+                                                {sendingRequestIds.includes(u.user_id) ? '...' : 'Connect'}
+                                            </button>
+                                        )}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </section>
+
                 {loadingFeed ? (
                     <div className="text-center py-10 text-slate-400">Loading feed...</div>
                 ) : (
@@ -247,72 +403,8 @@ export default function Dashboard() {
                             </div>
                         )}
 
-                        {feedItems.map((item, index) => (
+                        {feedItems.map((item) => (
                             <React.Fragment key={`${item.itemType}-${item.id}`}>
-                                {index === 1 && (
-                                    <section className="rounded-2xl border border-blue-500/20 bg-blue-500/10 p-4">
-                                        <p className="text-xs uppercase tracking-wider text-blue-300 mb-3 flex items-center gap-1">
-                                            <UserPlus size={13} /> Suggested Teammates
-                                        </p>
-                                        {suggestedUsers.length === 0 ? (
-                                            <p className="text-xs text-slate-400">Complete your profile to get teammate suggestions.</p>
-                                        ) : (
-                                            <div className="flex gap-3 overflow-x-auto pb-1">
-                                                {suggestedUsers.map((u) => (
-                                                    <div key={u.user_id} className="min-w-[260px] rounded-xl bg-black/20 border border-white/10 p-3 flex flex-col gap-3">
-                                                        <div>
-                                                            <p className="text-sm text-white">{u.name || 'Student'}</p>
-                                                            <p className="text-[11px] text-slate-400">{u.role || 'Hackathon enthusiast'}</p>
-                                                            <p className="text-[10px] text-cyan-300/80 uppercase tracking-wider mt-1">{u._track || 'general'} match</p>
-                                                        </div>
-                                                        <div className="flex gap-1.5 flex-wrap">
-                                                            <button
-                                                                onClick={() => navigate(`/profile/${u.user_id}`)}
-                                                                className="text-xs px-2.5 py-1.5 rounded border border-white/20 text-slate-200 hover:bg-white/10"
-                                                            >
-                                                                View
-                                                            </button>
-                                                            {incomingRequestsBySender[u.user_id] ? (
-                                                                <>
-                                                                    <button
-                                                                        onClick={() => handleIncomingAction(u.user_id, 'accepted')}
-                                                                        disabled={processingIncomingIds.includes(u.user_id)}
-                                                                        className="text-xs px-2.5 py-1.5 rounded bg-green-600 hover:bg-green-700 text-white disabled:opacity-60 flex items-center gap-1"
-                                                                    >
-                                                                        <CheckCircle size={12} /> Accept
-                                                                    </button>
-                                                                    <button
-                                                                        onClick={() => handleIncomingAction(u.user_id, 'rejected')}
-                                                                        disabled={processingIncomingIds.includes(u.user_id)}
-                                                                        className="text-xs px-2.5 py-1.5 rounded bg-red-600 hover:bg-red-700 text-white disabled:opacity-60 flex items-center gap-1"
-                                                                    >
-                                                                        <XCircle size={12} /> Reject
-                                                                    </button>
-                                                                </>
-                                                            ) : connectedUserIds.includes(u.user_id) ? (
-                                                                <span className="text-xs px-2.5 py-1.5 rounded bg-green-600/20 text-green-300 border border-green-500/30">
-                                                                    Connected
-                                                                </span>
-                                                            ) : pendingRequestIds.includes(u.user_id) ? (
-                                                                <span className="text-xs px-2.5 py-1.5 rounded bg-yellow-600/20 text-yellow-300 border border-yellow-500/30">
-                                                                    Requested
-                                                                </span>
-                                                            ) : (
-                                                                <button
-                                                                    onClick={() => handleConnectSuggestion(u)}
-                                                                    disabled={sendingRequestIds.includes(u.user_id)}
-                                                                    className="text-xs px-2.5 py-1.5 rounded bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-60"
-                                                                >
-                                                                    {sendingRequestIds.includes(u.user_id) ? 'Sending...' : 'Connect'}
-                                                                </button>
-                                                            )}
-                                                        </div>
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        )}
-                                    </section>
-                                )}
 
                                 <motion.article
                                     initial={{ opacity: 0, y: 8 }}

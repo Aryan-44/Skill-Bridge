@@ -182,9 +182,20 @@ export default function Profile() {
         return (
             <div className="min-h-screen bg-slate-950 text-slate-300">
                 <Navbar />
-                <div className="max-w-4xl mx-auto px-6 py-12 text-center">
-                    <h2 className="text-2xl font-bold text-white mb-4">Profile Not Found</h2>
-                    <p className="text-slate-400">This user has not set up their profile yet.</p>
+                <div className="max-w-4xl mx-auto px-6 py-20 text-center space-y-6">
+                    <div className="mx-auto w-20 h-20 rounded-full bg-white/5 flex items-center justify-center text-slate-600 mb-6">
+                        <User size={40} />
+                    </div>
+                    <h2 className="text-3xl font-bold text-white">Profile Not Found</h2>
+                    <p className="text-slate-400 max-w-md mx-auto leading-relaxed">
+                        This user hasn't set up their profile yet, or you might be looking for a profile that doesn't exist.
+                    </p>
+                    <button 
+                        onClick={() => navigate('/dashboard')}
+                        className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-medium transition-all"
+                    >
+                        Return to Community
+                    </button>
                 </div>
             </div>
         );

@@ -35,7 +35,7 @@ def get_hf_embedding(text: str):
     
     try:
         payload = {"inputs": text}
-        response = requests.post(HF_API_URL, headers=hf_headers, json=payload)
+        response = requests.post(HF_API_URL, headers=hf_headers, json=payload, timeout=10)
         
         if response.status_code == 200:
             # HF API returns a list of embeddings (we sent 1 input)
