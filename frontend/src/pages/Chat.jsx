@@ -1,15 +1,16 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { db } from '../firebaseConfig';
-import { collection, query, where, getDocs, orderBy, addDoc, serverTimestamp, onSnapshot, doc, getDoc, setDoc } from 'firebase/firestore';
+import { collection, query, where, orderBy, addDoc, serverTimestamp, onSnapshot, doc, getDoc, setDoc, updateDoc, arrayUnion, arrayRemove } from 'firebase/firestore';
 import { useSearchParams } from 'react-router-dom';
 import Navbar from '../components/Navbar';
-import { Send, User, MessageSquare, Users, Plus, X, Video } from 'lucide-react';
+import { Send, User, MessageSquare, Users, Plus, X, Video, Search } from 'lucide-react';
 
 export default function Chat() {
     const { currentUser } = useAuth();
     const [searchParams] = useSearchParams();
     const activeUid = searchParams.get('uid'); // chat?uid=xyz
+    const topic = searchParams.get('topic');
 
     // Data State
     const [connections, setConnections] = useState([]);
@@ -22,40 +23,65 @@ export default function Chat() {
     const [showCreateGroup, setShowCreateGroup] = useState(false);
     const [newGroupName, setNewGroupName] = useState("");
     const [selectedForGroup, setSelectedForGroup] = useState([]);
+    const [searchQuery, setSearchQuery] = useState("");
+    const [draftTopicUsed, setDraftTopicUsed] = useState("");
 
     // Group Members State
     const [groupMembers, setGroupMembers] = useState([]);
-    const [showMembersModal, setShowMembersModal] = useState(false);
-
     const messagesEndRef = useRef(null);
+    const scrollToBottom = () => {
+        messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    };
 
+    // 1. Fetch Connections & Groups
     // 1. Fetch Connections & Groups
     useEffect(() => {
         if (!currentUser) return;
 
-        // Fetch Connections
-        const fetchConnections = async () => {
-            const userDoc = await getDoc(doc(db, "users", currentUser.uid));
-            const connectedIds = userDoc.data()?.connected_users || [];
-            if (connectedIds.length === 0) return;
+        const fetchData = async () => {
+            // A. Fetch Connections (Parallelized)
+            try {
+                const userDoc = await getDoc(doc(db, "users", currentUser.uid));
+                const connectedIds = userDoc.data()?.connected_users || [];
 
-            const connData = [];
-            for (const id of connectedIds) {
-                const friendSnap = await getDoc(doc(db, "users", id));
-                if (friendSnap.exists()) {
-                    connData.push(friendSnap.data());
+                let connData = [];
+                if (connectedIds.length > 0) {
+                    const promises = connectedIds.map(id => getDoc(doc(db, "users", id)));
+                    const snapshots = await Promise.all(promises);
+                    connData = snapshots
+                        .filter(snap => snap.exists())
+                        .map(snap => snap.data());
                 }
-            }
-            setConnections(connData);
+                setConnections(connData);
 
-            // Handle URL param for direct messaging
-            if (activeUid) {
-                const friend = connData.find(u => u.user_id === activeUid);
-                if (friend) setActiveChat({ type: 'direct', data: friend });
+                // B. Handle URL Param (Active Chat) logic
+                if (activeUid) {
+                    // 1. Check if already in connections
+                    const existingFriend = connData.find(u => u.user_id === activeUid);
+                    if (existingFriend) {
+                        setActiveChat({ type: 'direct', data: existingFriend });
+                    } else {
+                        // 2. Fetch specifically if valid UID but not in connections
+                        // (This handles cases where you click a notification from someone not fully synced yet)
+                        try {
+                            const specificSnap = await getDoc(doc(db, "users", activeUid));
+                            if (specificSnap.exists()) {
+                                const friendData = specificSnap.data();
+                                setActiveChat({ type: 'direct', data: friendData });
+                                // Optional: You might want to add them to 'connections' temp for UI consistency
+                                setConnections(prev => [...prev, friendData]);
+                            }
+                        } catch (err) {
+                            console.error("Error fetching active chat user:", err);
+                        }
+                    }
+                }
+            } catch (error) {
+                console.error("Error loading chat data:", error);
             }
         };
 
-        // Fetch Groups
+        // C. Fetch Groups (Real-time)
         const fetchGroups = () => {
             const q = query(
                 collection(db, "groups"),
@@ -65,13 +91,13 @@ export default function Chat() {
                 const gData = snapshot.docs.map(doc => ({
                     id: doc.id,
                     ...doc.data(),
-                    type: 'group' // Marker
+                    type: 'group'
                 }));
                 setGroups(gData);
             });
         };
 
-        fetchConnections();
+        fetchData();
         const unsubGroups = fetchGroups();
 
         return () => unsubGroups();
@@ -106,13 +132,13 @@ export default function Chat() {
         });
 
         return () => unsubscribe();
-        return () => unsubscribe();
     }, [currentUser, activeChat]);
 
     // 3. Fetch Group Member Details
     useEffect(() => {
         if (!activeChat || activeChat.type !== 'group') {
-            setGroupMembers([]);
+            // eslint-disable-next-line react-hooks/set-state-in-effect
+            if (groupMembers.length > 0) setGroupMembers([]);
             return;
         }
 
@@ -144,11 +170,11 @@ export default function Chat() {
         };
 
         fetchMembers();
-    }, [activeChat, connections, currentUser]);
+    }, [activeChat, connections, currentUser, groupMembers.length]);
 
-    const scrollToBottom = () => {
-        messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-    };
+    // const scrollToBottom = () => {
+    //     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    // };
 
     const sendMessage = async (e, customText = null) => {
         if (e) e.preventDefault();
@@ -174,11 +200,78 @@ export default function Chat() {
                 timestamp: serverTimestamp(),
                 type: customText?.includes("meet.jit.si") ? "meeting" : "text" // Simple type detection
             });
+
+            // --- 4. NEW: Send Notification (ONLY for Direct Messages) ---
+            if (activeChat.type === 'direct') {
+                const receiverId = activeChat.data.user_id;
+
+                try {
+                    // A. Legacy Notification collection (for History List)
+                    await addDoc(collection(db, "notifications"), {
+                        type: "message",
+                        from: currentUser.uid,
+                        senderName: currentUser.displayName || "Unknown",
+                        to: receiverId,
+                        read: false,
+                        timestamp: serverTimestamp(),
+                        preview: textToSend.substring(0, 30)
+                    });
+
+                    // B. Simple Badge Logic (unread_from array on User Doc)
+                    // Use setDoc with merge to handle cases where field doesn't exist
+                    const receiverRef = doc(db, "users", receiverId);
+                    await setDoc(receiverRef, {
+                        unread_from: arrayUnion(currentUser.uid)
+                    }, { merge: true });
+
+                    console.log(`✅ Notification sent to ${receiverId}`);
+                } catch (notifError) {
+                    console.error("Error sending notification:", notifError);
+                    // Don't fail the whole message send if notification fails
+                }
+            }
+
+            // For Groups, we'd need to loop through members, but sticking to DM for now as requested.
+
             if (!customText) setNewMessage("");
         } catch (error) {
             console.error("Error sending message:", error);
         }
     };
+
+    // 5. Clear Badge when opening chat
+    useEffect(() => {
+        if (!currentUser || !activeChat) return;
+
+        const clearUnread = async () => {
+            const targetId = activeChat.type === 'direct' ? activeChat.data.user_id : activeChat.id;
+            try {
+                const userRef = doc(db, "users", currentUser.uid);
+                await updateDoc(userRef, {
+                    unread_from: arrayRemove(targetId)
+                });
+            } catch (err) {
+                // Ignore errors (e.g. if field doesn't exist yet)
+                console.log("Error clearing unread:", err);
+            }
+        };
+
+        clearUnread();
+    }, [activeChat, currentUser]);
+
+    useEffect(() => {
+        if (!activeChat || !topic || draftTopicUsed === topic || newMessage.trim()) return;
+
+        const timeoutId = window.setTimeout(() => {
+            setNewMessage(`Hi, I had a doubt about ${topic}. Could you help me understand it?`);
+            setDraftTopicUsed(topic);
+        }, 0);
+
+        return () => window.clearTimeout(timeoutId);
+    }, [activeChat, draftTopicUsed, newMessage, topic]);
+
+
+
 
     const handleStartMeeting = async () => {
         if (!activeChat) return;
@@ -221,33 +314,73 @@ export default function Chat() {
         }
     };
 
+    // Filter connections and groups based on search query
+    const filteredConnections = useMemo(() => {
+        if (!searchQuery.trim()) return connections;
+        const query = searchQuery.toLowerCase();
+        return connections.filter(user =>
+            user.name?.toLowerCase().includes(query) ||
+            user.role?.toLowerCase().includes(query)
+        );
+    }, [connections, searchQuery]);
+
+    const filteredGroups = useMemo(() => {
+        if (!searchQuery.trim()) return groups;
+        const query = searchQuery.toLowerCase();
+        return groups.filter(group =>
+            group.name?.toLowerCase().includes(query)
+        );
+    }, [groups, searchQuery]);
+
     return (
-        <div className="h-screen bg-slate-950 text-slate-300 flex flex-col">
+        <div className="h-screen bg-slate-950 text-slate-300 flex flex-col md:pl-72">
             <Navbar />
 
-            <div className="flex-1 max-w-7xl mx-auto w-full flex overflow-hidden border-t border-white/5">
+            <div className="flex-1 w-full flex overflow-hidden border-t border-white/5">
 
                 {/* SIDEBAR */}
                 <div className="w-80 bg-slate-900/50 border-r border-white/5 flex flex-col">
-                    <div className="p-4 border-b border-white/5 flex justify-between items-center">
-                        <h2 className="font-semibold text-white flex items-center gap-2">
-                            <MessageSquare size={18} className="text-purple-400" /> Chats
-                        </h2>
-                        <button
-                            onClick={() => setShowCreateGroup(true)}
-                            className="p-1.5 bg-white/5 hover:bg-white/10 rounded-lg text-slate-400 hover:text-white transition-colors"
-                            title="Create Group"
-                        >
-                            <Plus size={16} />
-                        </button>
+                    <div className="p-4 border-b border-white/5">
+                        <div className="flex justify-between items-center mb-3">
+                            <h2 className="font-semibold text-white flex items-center gap-2">
+                                <MessageSquare size={18} className="text-purple-400" /> Chats
+                            </h2>
+                            <button
+                                onClick={() => setShowCreateGroup(true)}
+                                className="p-1.5 bg-white/5 hover:bg-white/10 rounded-lg text-slate-400 hover:text-white transition-colors"
+                                title="Create Group"
+                            >
+                                <Plus size={16} />
+                            </button>
+                        </div>
+
+                        {/* Search Input */}
+                        <div className="relative">
+                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={16} />
+                            <input
+                                type="text"
+                                placeholder="Search chats..."
+                                value={searchQuery}
+                                onChange={(e) => setSearchQuery(e.target.value)}
+                                className="w-full bg-slate-950 border border-white/10 rounded-lg pl-9 pr-9 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 transition-colors"
+                            />
+                            {searchQuery && (
+                                <button
+                                    onClick={() => setSearchQuery("")}
+                                    className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white transition-colors"
+                                >
+                                    <X size={14} />
+                                </button>
+                            )}
+                        </div>
                     </div>
 
                     <div className="flex-1 overflow-y-auto p-2 space-y-4">
 
                         {/* 1. GROUPS */}
                         <div className="space-y-1">
-                            {groups.length > 0 && <p className="text-[10px] uppercase font-bold text-slate-500 px-3 mb-1">Groups</p>}
-                            {groups.map(group => (
+                            {filteredGroups.length > 0 && <p className="text-[10px] uppercase font-bold text-slate-500 px-3 mb-1">Groups</p>}
+                            {filteredGroups.map(group => (
                                 <button
                                     key={group.id}
                                     onClick={() => setActiveChat({ type: 'group', ...group })}
@@ -270,8 +403,8 @@ export default function Chat() {
 
                         {/* 2. DIRECT MESSAGES */}
                         <div className="space-y-1">
-                            {connections.length > 0 && <p className="text-[10px] uppercase font-bold text-slate-500 px-3 mb-1">Direct Messages</p>}
-                            {connections.map(user => (
+                            {filteredConnections.length > 0 && <p className="text-[10px] uppercase font-bold text-slate-500 px-3 mb-1">Direct Messages</p>}
+                            {filteredConnections.map(user => (
                                 <button
                                     key={user.user_id}
                                     onClick={() => setActiveChat({ type: 'direct', data: user })}
@@ -293,8 +426,10 @@ export default function Chat() {
                             ))}
                         </div>
 
-                        {connections.length === 0 && groups.length === 0 && (
-                            <p className="text-xs text-slate-500 text-center py-6">No conversations yet.</p>
+                        {filteredConnections.length === 0 && filteredGroups.length === 0 && (
+                            <p className="text-xs text-slate-500 text-center py-6">
+                                {searchQuery ? "No chats found" : "No conversations yet."}
+                            </p>
                         )}
                     </div>
                 </div>
@@ -319,8 +454,7 @@ export default function Chat() {
                                     </span>
                                     {activeChat.type === 'group' && (
                                         <div
-                                            className="flex items-center gap-2 cursor-pointer hover:bg-white/5 p-1 rounded transition-colors group/header"
-                                            onClick={() => setShowMembersModal(true)}
+                                            className="flex items-center gap-2 p-1 rounded transition-colors group/header"
                                         >
                                             <div className="flex -space-x-2">
                                                 {groupMembers.slice(0, 3).map(m => (

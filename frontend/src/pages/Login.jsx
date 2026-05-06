@@ -5,8 +5,15 @@ import { motion } from 'framer-motion';
 import { BrainCircuit, ArrowRight } from 'lucide-react';
 
 export default function Login() {
-    const { login, loginWithEmail, signupWithEmail } = useAuth();
+    const { login, loginWithEmail, signupWithEmail, currentUser } = useAuth();
     const navigate = useNavigate();
+
+    // Redirect if already logged in
+    React.useEffect(() => {
+        if (currentUser) {
+            navigate('/dashboard');
+        }
+    }, [currentUser, navigate]);
 
     // UI State
     const [isSignup, setIsSignup] = useState(false);
@@ -68,9 +75,9 @@ export default function Login() {
                         <div className="inline-flex p-3 bg-blue-500/10 rounded-xl border border-blue-500/20 mb-4">
                             <BrainCircuit className="w-8 h-8 text-blue-400" />
                         </div>
-                        <h1 className="text-2xl font-bold text-white">Skill-Bridge</h1>
+                        <h1 className="text-2xl font-bold text-white">SkillBridge Campus</h1>
                         <p className="text-slate-400 text-sm mt-1">
-                            {isSignup ? "Create your account to get started" : "Welcome back, developer"}
+                            {isSignup ? "Join your campus learning community" : "Welcome back to your learning network"}
                         </p>
                     </div>
 

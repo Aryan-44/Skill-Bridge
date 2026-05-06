@@ -2,7 +2,8 @@ import uvicorn
 import os
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from models import UserProfile, SearchQuery, EmailNotificationRequest, ChatRequest
+from models import SearchQuery, EmailNotificationRequest, ChatRequest
+from routers import community
 
 import llm_utils
 
@@ -29,6 +30,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(community.router)
 
 # --- Routes ---
 

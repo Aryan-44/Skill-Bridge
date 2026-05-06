@@ -1,466 +1,491 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import axios from 'axios';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
-
 import { motion, AnimatePresence } from 'framer-motion';
-import { Upload, Search, FileText, CheckCircle, Cpu, User, Bot } from 'lucide-react';
+import { Calendar, PlayCircle, Sparkles, User, Video, UserPlus, CheckCircle, XCircle } from 'lucide-react';
 import { db } from '../firebaseConfig';
-import { doc, setDoc, collection, getDocs } from 'firebase/firestore';
+import { addDoc, arrayUnion, collection, doc, getDoc, getDocs, serverTimestamp, updateDoc } from 'firebase/firestore';
 import Navbar from '../components/Navbar';
 import API_URL from '../config';
 
 export default function Dashboard() {
     const { currentUser } = useAuth();
     const navigate = useNavigate();
+    const [feedItems, setFeedItems] = useState([]);
+    const [loadingFeed, setLoadingFeed] = useState(true);
+    const [showOnboarding, setShowOnboarding] = useState(false);
+    const [showExpModal, setShowExpModal] = useState(false);
+    const [showEventModal, setShowEventModal] = useState(false);
+    const [suggestedUsers, setSuggestedUsers] = useState([]);
+    const [connectedUserIds, setConnectedUserIds] = useState([]);
+    const [pendingRequestIds, setPendingRequestIds] = useState([]);
+    const [sendingRequestIds, setSendingRequestIds] = useState([]);
+    const [incomingRequestsBySender, setIncomingRequestsBySender] = useState({});
+    const [processingIncomingIds, setProcessingIncomingIds] = useState([]);
+    const [expForm, setExpForm] = useState({ hackathon_name: '', journey: '', challenges: '', how_overcome: '', tips: '', video_url: '' });
+    const [eventForm, setEventForm] = useState({ title: '', college_name: '', event_type: 'Hackathon', description: '', date: '', location: '', registration_link: '', poster_url: '', video_url: '', contact_note: '' });
 
-    // State for Upload Logic
-    const [entryMode, setEntryMode] = useState('upload'); // 'upload' | 'manual'
-    const [file, setFile] = useState(null);
-    const [analyzing, setAnalyzing] = useState(false);
-    const [profileData, setProfileData] = useState(null);
-    const [embedding, setEmbedding] = useState(null); // Store embedding for saving
-    const [uploadStatus, setUploadStatus] = useState("idle"); // idle, success, error
-
-    // Manual Data State
-    const [manualData, setManualData] = useState({
-        role: "",
-        skills: "",
-        summary: ""
-    });
-
-    // State for Search Logic
-    const [searchQuery, setSearchQuery] = useState("");
-    const [searchResults, setSearchResults] = useState([]);
-    const [searching, setSearching] = useState(false);
-
-    // --- Handlers ---
-
-    // Helper for Client-Side Search
-    const cosineSimilarity = (vecA, vecB) => {
-        if (!vecA || !vecB || vecA.length !== vecB.length) return 0;
-        const dotProduct = vecA.reduce((acc, val, i) => acc + val * vecB[i], 0);
-        const magnitudeA = Math.sqrt(vecA.reduce((acc, val) => acc + val * val, 0));
-        const magnitudeB = Math.sqrt(vecB.reduce((acc, val) => acc + val * val, 0));
-        if (magnitudeA === 0 || magnitudeB === 0) return 0;
-        return dotProduct / (magnitudeA * magnitudeB);
-    };
-
-    const handleFileChange = (e) => {
-        setFile(e.target.files[0]);
-        setProfileData(null);
-        setUploadStatus("idle");
-    };
-
-    const handleAnalyze = async () => {
-        if (!file) return;
-        setAnalyzing(true);
-
-        const formData = new FormData();
-        formData.append("file", file);
-
-        try {
-            const res = await axios.post(`${API_URL}/analyze`, formData);
-            setProfileData(res.data.data);
-            setEmbedding(res.data.embedding);
-            setAnalyzing(false);
-        } catch (err) {
-            console.error(err);
-            setAnalyzing(false);
-            setUploadStatus("error");
-        }
-    };
-
-    const handleSaveProfile = async () => {
-        if (!profileData || !currentUser) return;
-        try {
-            // Write directly to Firestore (Client SDK)
-            await setDoc(doc(db, "users", currentUser.uid), {
-                user_id: currentUser.uid,
-                name: currentUser.displayName,
-                email: currentUser.email,
-                skills: profileData.skills,
-                role: profileData.role || "Student",
-                summary: profileData.summary,
-                complexity_score: profileData.complexity_score,
-                projects: profileData.projects || [],
-                education: profileData.education || [],
-                location: profileData.location || "Unknown",
-                embedding: embedding
-            });
-            setUploadStatus("success");
-            alert("Profile Published!");
-        } catch (err) {
-            console.error("Firestore Save Error:", err);
-            setUploadStatus("error");
-        }
-    };
-
-    const handleManualSave = async () => {
-        if (!manualData.role || !manualData.summary) {
-            alert("Please fill in Role and Summary");
-            return;
-        }
-        setAnalyzing(true);
-        try {
-            // 1. Get Embedding for Manual Summary + Skills (CRITICAL for search)
-            const textToEmbed = `${manualData.summary} ${manualData.skills}`;
-            const res = await axios.post(`${API_URL}/vectorize`, { query_text: textToEmbed, limit: 1 });
-            const manualEmbedding = res.data.embedding;
-
-            // 2. Save to Firestore
-            await setDoc(doc(db, "users", currentUser.uid), {
-                user_id: currentUser.uid,
-                name: currentUser.displayName,
-                email: currentUser.email,
-                skills: manualData.skills.split(',').map(s => s.trim()),
-                role: manualData.role,
-                summary: manualData.summary,
-                location: manualData.location || "Unknown",
-                phone: manualData.phone || "",
-                social_links: { linkedin: manualData.link || "" },
-                complexity_score: 5, // Default for manual
-                projects: [],
-                education: [],
-                embedding: manualEmbedding
-            });
-            setAnalyzing(false);
-            alert("Profile Saved Successfully!");
-        } catch (err) {
-            console.error("Manual Save Error:", err);
-            setAnalyzing(false);
-        }
-    };
-
-    const handleSearch = async () => {
-        if (!searchQuery) return;
-        setSearching(true);
-        setSearchResults([]); // Clear old results
-
-        try {
-            // 1. Get Embedding for the Query
-            const embedRes = await axios.post(`${API_URL}/vectorize`, { query_text: searchQuery, limit: 1 });
-            const queryVector = embedRes.data.embedding;
-
-            // 2. Fetch Users
-            const querySnapshot = await getDocs(collection(db, "users"));
-            const matches = [];
-
-            // --- CONFIGURATION ---
-            // Lower the threshold slightly to allow "fuzzy" AI matches to pass
-            const MIN_SCORE_TO_SHOW = 0.35;
-
-            querySnapshot.forEach((doc) => {
-                const userData = doc.data();
-                if (userData.user_id === currentUser?.uid) return; // Skip self
-
-                // 3. Prepare Data for Comparison
-                const q = searchQuery.toLowerCase().trim();
-                const uName = (userData.name || "").toLowerCase();
-                const uRole = (userData.role || "").toLowerCase();
-                // Join array into a single string for easy searching: "react nodejs python"
-                const uSkills = Array.isArray(userData.skills)
-                    ? userData.skills.join(" ").toLowerCase()
-                    : (userData.skills || "").toLowerCase();
-
-                // 4. Calculate Base AI Score (Vector Similarity)
-                let finalScore = userData.embedding
-                    ? cosineSimilarity(queryVector, userData.embedding)
-                    : 0;
-
-                // 5. APPLY "WATERFALL" BOOSTING
-
-                // CASE A: EXACT NAME MATCH (Highest Priority)
-                if (uName.includes(q)) {
-                    finalScore = 1.0; // Perfect match
+    useEffect(() => {
+        const loadHubData = async () => {
+            if (!currentUser) return;
+            try {
+                const profileRef = doc(db, "users", currentUser.uid);
+                const profileSnap = await getDoc(profileRef);
+                if (!profileSnap.exists()) {
+                    setShowOnboarding(true);
                 }
-                // CASE B: SKILL OR ROLE MATCH (High Priority)
-                // If the user searches "React" and the profile has "React", we FORCE the score up.
-                else if (uRole.includes(q) || uSkills.includes(q)) {
-                    // If the AI gave a low score (e.g., 0.2), we boost it to at least 0.8
-                    // If the AI gave a high score (e.g., 0.7), we add a little bonus (+0.2)
-                    finalScore = Math.max(finalScore + 0.3, 0.8);
-                }
+                const myProfile = profileSnap.exists() ? profileSnap.data() : {};
+                const myConnections = myProfile?.connected_users || [];
+                setConnectedUserIds(myConnections);
 
-                // 6. FILTER & SAVE
-                // Only show if the final score (after boosting) is good enough
-                if (finalScore >= MIN_SCORE_TO_SHOW) {
-                    matches.push({
-                        ...userData,
-                        score: finalScore > 1 ? 1 : finalScore // Cap at 1.0
-                    });
-                }
+                const [expRes, eventRes] = await Promise.all([
+                    axios.get(`${API_URL}/community/experiences`),
+                    axios.get(`${API_URL}/community/events`)
+                ]);
+
+                const experiences = (expRes.data || []).map((item) => ({
+                    ...item,
+                    itemType: "experience",
+                    feedTs: new Date(item.timestamp || 0).getTime()
+                }));
+                const events = (eventRes.data || []).map((item) => ({
+                    ...item,
+                    itemType: "event",
+                    feedTs: new Date(item.timestamp || 0).getTime()
+                }));
+
+                const mixed = [...experiences, ...events].sort((a, b) => b.feedTs - a.feedTs);
+                setFeedItems(mixed);
+
+                const usersSnap = await getDocs(collection(db, "users"));
+                const allUsers = [];
+                usersSnap.forEach((d) => allUsers.push(d.data()));
+                const reqSnap = await getDocs(collection(db, "requests"));
+                const allReqs = reqSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+                const pendingOutgoing = allReqs
+                    .filter((r) => r.sender_id === currentUser.uid && r.status === 'pending')
+                    .map((r) => r.receiver_id);
+                setPendingRequestIds(pendingOutgoing);
+                const incomingMap = {};
+                allReqs
+                    .filter((r) => r.receiver_id === currentUser.uid && r.status === 'pending')
+                    .forEach((r) => { incomingMap[r.sender_id] = r.id; });
+                setIncomingRequestsBySender(incomingMap);
+                const meRole = (myProfile?.role || '').toLowerCase();
+                const meSkills = Array.isArray(myProfile?.skills) ? myProfile.skills.join(' ').toLowerCase() : (myProfile?.skills || '').toLowerCase();
+
+                const inferTrack = (text) => {
+                    if (/frontend|react|ui|ux|html|css/.test(text)) return 'frontend';
+                    if (/backend|node|api|java|spring|django|flask|database/.test(text)) return 'backend';
+                    if (/test|qa|automation|selenium/.test(text)) return 'tester';
+                    if (/ml|ai|data|python|analytics/.test(text)) return 'ml';
+                    return 'general';
+                };
+                const myTrack = inferTrack(`${meRole} ${meSkills}`);
+                const complements = {
+                    frontend: ['backend', 'tester', 'ml'],
+                    backend: ['frontend', 'tester', 'ml'],
+                    tester: ['frontend', 'backend'],
+                    ml: ['frontend', 'backend'],
+                    general: ['frontend', 'backend', 'tester', 'ml']
+                };
+                const desired = complements[myTrack] || complements.general;
+
+                const suggestions = allUsers
+                    .filter((u) => u.user_id && u.user_id !== currentUser.uid)
+                    .map((u) => {
+                        const role = (u.role || '').toLowerCase();
+                        const skills = Array.isArray(u.skills) ? u.skills.join(' ').toLowerCase() : (u.skills || '').toLowerCase();
+                        const track = inferTrack(`${role} ${skills}`);
+                        const score = desired.includes(track) ? 2 : 0;
+                        return { ...u, _track: track, _score: score };
+                    })
+                    .sort((a, b) => b._score - a._score)
+                    .slice(0, 5);
+                setSuggestedUsers(suggestions);
+            } catch (err) {
+                console.error("Failed loading dashboard feed", err);
+            } finally {
+                setLoadingFeed(false);
+            }
+        };
+        loadHubData();
+    }, [currentUser]);
+
+    const refreshFeed = async () => {
+        const [expRes, eventRes] = await Promise.all([
+            axios.get(`${API_URL}/community/experiences`),
+            axios.get(`${API_URL}/community/events`)
+        ]);
+        const experiences = (expRes.data || []).map((item) => ({ ...item, itemType: "experience", feedTs: new Date(item.timestamp || 0).getTime() }));
+        const events = (eventRes.data || []).map((item) => ({ ...item, itemType: "event", feedTs: new Date(item.timestamp || 0).getTime() }));
+        setFeedItems([...experiences, ...events].sort((a, b) => b.feedTs - a.feedTs));
+    };
+
+    const handleIncomingAction = async (senderId, action) => {
+        const reqId = incomingRequestsBySender[senderId];
+        if (!reqId || !currentUser?.uid) return;
+        setProcessingIncomingIds((prev) => [...prev, senderId]);
+        try {
+            await updateDoc(doc(db, "requests", reqId), { status: action });
+            if (action === 'accepted') {
+                await updateDoc(doc(db, "users", currentUser.uid), {
+                    connected_users: arrayUnion(senderId)
+                });
+                await updateDoc(doc(db, "users", senderId), {
+                    connected_users: arrayUnion(currentUser.uid)
+                });
+                setConnectedUserIds((prev) => [...new Set([...prev, senderId])]);
+            }
+            setIncomingRequestsBySender((prev) => {
+                const next = { ...prev };
+                delete next[senderId];
+                return next;
             });
-
-            // 7. Sort: Highest score (1.0) goes first
-            matches.sort((a, b) => b.score - a.score);
-
-            setSearchResults(matches.slice(0, 5));
-
         } catch (err) {
-            console.error("Search Error:", err);
+            console.error("Failed processing incoming request", err);
         } finally {
-            setSearching(false);
+            setProcessingIncomingIds((prev) => prev.filter((id) => id !== senderId));
         }
     };
-    // --- UI Components ---
+
+    const handleConnectSuggestion = async (targetUser) => {
+        if (!currentUser?.uid || !targetUser?.user_id) return;
+        if (connectedUserIds.includes(targetUser.user_id) || pendingRequestIds.includes(targetUser.user_id)) return;
+        setSendingRequestIds((prev) => [...prev, targetUser.user_id]);
+        try {
+            await addDoc(collection(db, "requests"), {
+                sender_id: currentUser.uid,
+                sender_name: currentUser.displayName,
+                receiver_id: targetUser.user_id,
+                receiver_name: targetUser.name || "User",
+                status: 'pending',
+                timestamp: serverTimestamp()
+            });
+            setPendingRequestIds((prev) => [...prev, targetUser.user_id]);
+        } catch (err) {
+            console.error("Failed sending request", err);
+        } finally {
+            setSendingRequestIds((prev) => prev.filter((id) => id !== targetUser.user_id));
+        }
+    };
+
+    const handlePostExperience = async (e) => {
+        e.preventDefault();
+        try {
+            const payload = {
+                ...expForm,
+                user_id: currentUser?.uid || 'anonymous',
+                user_name: currentUser?.displayName || 'Anonymous'
+            };
+            await axios.post(`${API_URL}/community/experiences`, payload);
+            setShowExpModal(false);
+            setExpForm({ hackathon_name: '', journey: '', challenges: '', how_overcome: '', tips: '', video_url: '' });
+            await refreshFeed();
+        } catch (err) {
+            console.error("Failed to post experience", err);
+        }
+    };
+
+    const handlePostEvent = async (e) => {
+        e.preventDefault();
+        try {
+            const payload = {
+                ...eventForm,
+                user_id: currentUser?.uid || 'anonymous',
+                user_name: currentUser?.displayName || 'Anonymous'
+            };
+            await axios.post(`${API_URL}/community/events`, payload);
+            setShowEventModal(false);
+            setEventForm({ title: '', college_name: '', event_type: 'Hackathon', description: '', date: '', location: '', registration_link: '', poster_url: '', video_url: '', contact_note: '' });
+            await refreshFeed();
+        } catch (err) {
+            console.error("Failed to post hackathon", err);
+        }
+    };
 
     return (
-        <div className="min-h-screen bg-slate-950 text-slate-300">
+        <div className="min-h-screen bg-slate-950 text-slate-300 md:pl-72">
             <Navbar />
 
-            <main className="max-w-7xl mx-auto px-6 py-8 grid grid-cols-1 lg:grid-cols-2 gap-8">
-
-                {/* LEFT PANEL: Implicit Profile Builder */}
-                <section>
-                    <h2 className="text-xl font-semibold text-white mb-4 flex items-center gap-2">
-                        <FileText className="text-purple-400" size={20} /> Build Your Profile
-                    </h2>
-
-                    <div className="bg-slate-900/50 border border-white/10 rounded-2xl p-6 backdrop-blur-sm">
-
-                        {/* Entry Mode Toggle */}
-                        <div className="flex gap-2 mb-6 bg-slate-950 p-1 rounded-lg border border-white/10 w-fit">
+            <main className="max-w-6xl mx-auto px-6 py-8">
+                <section className="mb-8 rounded-2xl border border-cyan-400/20 bg-gradient-to-r from-cyan-500/10 via-blue-500/10 to-purple-500/10 p-6">
+                    <div className="flex flex-col gap-3 md:flex-row md:justify-between md:items-end">
+                        <div>
+                            <p className="text-xs uppercase tracking-[0.25em] text-cyan-300 mb-2">Community Hub</p>
+                            <h1 className="text-2xl md:text-3xl font-semibold text-white">Campus Posts, Experiences, and Hackathon Updates</h1>
+                            <p className="text-sm text-slate-300 mt-2 max-w-2xl">
+                                Just like a social feed: discover hackathon posts, watch shared videos, and connect with students ready to participate.
+                            </p>
+                        </div>
+                        <div className="flex gap-2">
                             <button
-                                onClick={() => setEntryMode('upload')}
-                                className={`px-4 py-1.5 text-sm font-medium rounded-md transition-all ${entryMode === 'upload' ? 'bg-purple-600 text-white shadow' : 'text-slate-400 hover:text-white'
-                                    }`}
+                                onClick={() => setShowExpModal(true)}
+                                className="w-fit rounded-xl bg-emerald-600 hover:bg-emerald-700 px-4 py-2 text-sm text-white font-medium"
                             >
-                                Upload Resume
+                                Post Experience
                             </button>
                             <button
-                                onClick={() => setEntryMode('manual')}
-                                className={`px-4 py-1.5 text-sm font-medium rounded-md transition-all ${entryMode === 'manual' ? 'bg-purple-600 text-white shadow' : 'text-slate-400 hover:text-white'
-                                    }`}
+                                onClick={() => setShowEventModal(true)}
+                                className="w-fit rounded-xl bg-blue-600 hover:bg-blue-700 px-4 py-2 text-sm text-white font-medium"
                             >
-                                Manual Entry
+                                Post Hackathon
                             </button>
                         </div>
+                    </div>
+                </section>
 
-                        {entryMode === 'upload' ? (
-                            <>
-                                <p className="text-sm text-slate-400 mb-4">Upload a past thesis, project report, Resume/CV, or code file. Gemini will analyze your actual experience.</p>
-                                <div className="flex gap-3 mb-6">
-                                    <input
-                                        type="file"
-                                        onChange={handleFileChange}
-                                        className="block w-full text-sm text-slate-400 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700 transition-all cursor-pointer bg-slate-950/50 rounded-lg border border-white/10"
-                                    />
-                                    <button
-                                        onClick={handleAnalyze}
-                                        disabled={!file || analyzing}
-                                        className="px-6 py-2 bg-purple-600 hover:bg-purple-700 text-white font-medium rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-                                    >
-                                        {analyzing ? <span className="animate-spin">⏳</span> : <Upload size={18} />}
-                                        Analyze
-                                    </button>
-                                </div>
-                            </>
-                        ) : (
-                            // MANUAL ENTRY FORM
-                            <div className="space-y-4 mb-6">
-                                <div className="grid grid-cols-2 gap-4">
-                                    <div>
-                                        <label className="block text-xs uppercase font-bold text-slate-500 mb-1">Role / Title</label>
-                                        <input
-                                            type="text"
-                                            value={manualData.role}
-                                            onChange={(e) => setManualData({ ...manualData, role: e.target.value })}
-                                            className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:border-purple-500 outline-none"
-                                            placeholder="e.g. Frontend Developer"
-                                        />
-                                    </div>
-                                    <div>
-                                        <label className="block text-xs uppercase font-bold text-slate-500 mb-1">Location</label>
-                                        <input
-                                            type="text"
-                                            value={manualData.location || ""}
-                                            onChange={(e) => setManualData({ ...manualData, location: e.target.value })}
-                                            className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:border-purple-500 outline-none"
-                                            placeholder="City, Country"
-                                        />
-                                    </div>
-                                </div>
+                {loadingFeed ? (
+                    <div className="text-center py-10 text-slate-400">Loading feed...</div>
+                ) : (
+                    <div className="space-y-5">
+                        {feedItems.length === 0 && (
+                            <div className="text-center py-16 border border-white/10 rounded-2xl bg-slate-900/40">
+                                <Sparkles className="mx-auto mb-3 text-purple-400/60" />
+                                <p className="text-sm text-slate-400">No posts yet. Share your first experience or college hackathon update.</p>
+                            </div>
+                        )}
 
-                                <div className="grid grid-cols-2 gap-4">
-                                    <div>
-                                        <label className="block text-xs uppercase font-bold text-slate-500 mb-1">Mobile Number</label>
-                                        <input
-                                            type="text"
-                                            value={manualData.phone || ""}
-                                            onChange={(e) => setManualData({ ...manualData, phone: e.target.value })}
-                                            className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:border-purple-500 outline-none"
-                                            placeholder="+1 234 567 890"
-                                        />
-                                    </div>
-                                    <div>
-                                        <label className="block text-xs uppercase font-bold text-slate-500 mb-1">LinkedIn / Portfolio</label>
-                                        <input
-                                            type="text"
-                                            value={manualData.link || ""}
-                                            onChange={(e) => setManualData({ ...manualData, link: e.target.value })}
-                                            className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:border-purple-500 outline-none"
-                                            placeholder="https://linkedin.com/in/..."
-                                        />
-                                    </div>
-                                </div>
+                        {feedItems.map((item, index) => (
+                            <React.Fragment key={`${item.itemType}-${item.id}`}>
+                                {index === 1 && (
+                                    <section className="rounded-2xl border border-blue-500/20 bg-blue-500/10 p-4">
+                                        <p className="text-xs uppercase tracking-wider text-blue-300 mb-3 flex items-center gap-1">
+                                            <UserPlus size={13} /> Suggested Teammates
+                                        </p>
+                                        {suggestedUsers.length === 0 ? (
+                                            <p className="text-xs text-slate-400">Complete your profile to get teammate suggestions.</p>
+                                        ) : (
+                                            <div className="flex gap-3 overflow-x-auto pb-1">
+                                                {suggestedUsers.map((u) => (
+                                                    <div key={u.user_id} className="min-w-[260px] rounded-xl bg-black/20 border border-white/10 p-3 flex flex-col gap-3">
+                                                        <div>
+                                                            <p className="text-sm text-white">{u.name || 'Student'}</p>
+                                                            <p className="text-[11px] text-slate-400">{u.role || 'Hackathon enthusiast'}</p>
+                                                            <p className="text-[10px] text-cyan-300/80 uppercase tracking-wider mt-1">{u._track || 'general'} match</p>
+                                                        </div>
+                                                        <div className="flex gap-1.5 flex-wrap">
+                                                            <button
+                                                                onClick={() => navigate(`/profile/${u.user_id}`)}
+                                                                className="text-xs px-2.5 py-1.5 rounded border border-white/20 text-slate-200 hover:bg-white/10"
+                                                            >
+                                                                View
+                                                            </button>
+                                                            {incomingRequestsBySender[u.user_id] ? (
+                                                                <>
+                                                                    <button
+                                                                        onClick={() => handleIncomingAction(u.user_id, 'accepted')}
+                                                                        disabled={processingIncomingIds.includes(u.user_id)}
+                                                                        className="text-xs px-2.5 py-1.5 rounded bg-green-600 hover:bg-green-700 text-white disabled:opacity-60 flex items-center gap-1"
+                                                                    >
+                                                                        <CheckCircle size={12} /> Accept
+                                                                    </button>
+                                                                    <button
+                                                                        onClick={() => handleIncomingAction(u.user_id, 'rejected')}
+                                                                        disabled={processingIncomingIds.includes(u.user_id)}
+                                                                        className="text-xs px-2.5 py-1.5 rounded bg-red-600 hover:bg-red-700 text-white disabled:opacity-60 flex items-center gap-1"
+                                                                    >
+                                                                        <XCircle size={12} /> Reject
+                                                                    </button>
+                                                                </>
+                                                            ) : connectedUserIds.includes(u.user_id) ? (
+                                                                <span className="text-xs px-2.5 py-1.5 rounded bg-green-600/20 text-green-300 border border-green-500/30">
+                                                                    Connected
+                                                                </span>
+                                                            ) : pendingRequestIds.includes(u.user_id) ? (
+                                                                <span className="text-xs px-2.5 py-1.5 rounded bg-yellow-600/20 text-yellow-300 border border-yellow-500/30">
+                                                                    Requested
+                                                                </span>
+                                                            ) : (
+                                                                <button
+                                                                    onClick={() => handleConnectSuggestion(u)}
+                                                                    disabled={sendingRequestIds.includes(u.user_id)}
+                                                                    className="text-xs px-2.5 py-1.5 rounded bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-60"
+                                                                >
+                                                                    {sendingRequestIds.includes(u.user_id) ? 'Sending...' : 'Connect'}
+                                                                </button>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </section>
+                                )}
 
-                                <div>
-                                    <label className="block text-xs uppercase font-bold text-slate-500 mb-1">Tech Stack (Comma Separated)</label>
-                                    <input
-                                        type="text"
-                                        value={manualData.skills}
-                                        onChange={(e) => setManualData({ ...manualData, skills: e.target.value })}
-                                        className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:border-purple-500 outline-none"
-                                        placeholder="e.g. React, Node.js, Python"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-xs uppercase font-bold text-slate-500 mb-1">Professional Summary</label>
-                                    <textarea
-                                        value={manualData.summary}
-                                        onChange={(e) => setManualData({ ...manualData, summary: e.target.value })}
-                                        className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:border-purple-500 outline-none h-24"
-                                        placeholder="Briefly describe your experience and what you build..."
-                                    />
-                                    <p className="text-[10px] text-purple-400 mt-1 flex items-center gap-1">
-                                        <Bot size={10} /> Tip: Ask the AI Assistant to write this for you!
-                                    </p>
-                                </div>
-                                <button
-                                    onClick={handleManualSave}
-                                    disabled={analyzing}
-                                    className="w-full py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition-all font-medium text-sm flex justify-center items-center gap-2"
+                                <motion.article
+                                    initial={{ opacity: 0, y: 8 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    className="rounded-2xl border border-white/10 bg-slate-900/60 p-5"
                                 >
-                                    {analyzing ? "Processing..." : "Save Profile"}
+                                    <div className="flex justify-between items-center mb-3">
+                                        <div>
+                                            <p className="text-sm text-white font-semibold">{item.user_name || "Anonymous"}</p>
+                                            <p className="text-xs text-slate-500">{item.itemType === "experience" ? "Experience Post" : "College Hackathon Post"}</p>
+                                        </div>
+                                        <span className="text-xs text-slate-500 flex items-center gap-1">
+                                            <Calendar size={12} /> {item.timestamp ? new Date(item.timestamp).toLocaleDateString() : "Recent"}
+                                        </span>
+                                    </div>
+
+                                {item.itemType === "experience" ? (
+                                    <>
+                                        <h3 className="text-white text-lg font-semibold mb-2">{item.hackathon_name}</h3>
+                                        <p className="text-sm text-slate-300 mb-3">{item.journey}</p>
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
+                                            <div className="rounded-lg bg-black/20 border border-white/10 p-3">
+                                                <p className="text-amber-300 font-semibold mb-1">Issues Faced</p>
+                                                <p className="text-slate-300">{item.challenges}</p>
+                                            </div>
+                                            <div className="rounded-lg bg-black/20 border border-white/10 p-3">
+                                                <p className="text-emerald-300 font-semibold mb-1">How They Overcame</p>
+                                                <p className="text-slate-300">{item.how_overcome}</p>
+                                            </div>
+                                        </div>
+                                    </>
+                                ) : (
+                                    <>
+                                        <h3 className="text-white text-lg font-semibold mb-2">{item.title}</h3>
+                                        <p className="text-sm text-slate-300 mb-3">{item.description}</p>
+                                        <div className="flex flex-wrap gap-2 text-xs">
+                                            {item.college_name && <span className="px-2 py-1 rounded bg-white/10">{item.college_name}</span>}
+                                            {item.event_type && <span className="px-2 py-1 rounded bg-white/10">{item.event_type}</span>}
+                                            {item.location && <span className="px-2 py-1 rounded bg-white/10">{item.location}</span>}
+                                        </div>
+                                    </>
+                                )}
+
+                                {(item.video_url || item.poster_url) && (
+                                    <div className="mt-4">
+                                        {item.video_url ? (
+                                            <div className="rounded-xl overflow-hidden border border-white/10 bg-black">
+                                                <video controls className="w-full max-h-[360px]" src={item.video_url} />
+                                            </div>
+                                        ) : (
+                                            <img src={item.poster_url} alt="post-media" className="rounded-xl border border-white/10 w-full max-h-[360px] object-cover" />
+                                        )}
+                                    </div>
+                                )}
+
+                                    <div className="mt-4 flex justify-end gap-2">
+                                        <button
+                                            onClick={() => navigate('/hackathons')}
+                                            className="text-xs px-3 py-1.5 rounded border border-blue-500/30 text-blue-300 hover:bg-blue-500/10"
+                                        >
+                                            View in Hub
+                                        </button>
+                                        {item.user_id && (
+                                            <button
+                                                onClick={() => navigate(`/profile/${item.user_id}`)}
+                                                className="text-xs px-3 py-1.5 rounded border border-white/20 text-slate-200 hover:bg-white/10 flex items-center gap-1"
+                                            >
+                                                <User size={12} /> Profile
+                                            </button>
+                                        )}
+                                        {item.video_url && (
+                                            <span className="text-xs px-3 py-1.5 rounded border border-purple-500/30 text-purple-300 flex items-center gap-1">
+                                                <PlayCircle size={12} /> Video
+                                            </span>
+                                        )}
+                                        {!item.video_url && item.poster_url && (
+                                            <span className="text-xs px-3 py-1.5 rounded border border-purple-500/30 text-purple-300 flex items-center gap-1">
+                                                <Video size={12} /> Media
+                                            </span>
+                                        )}
+                                    </div>
+                                </motion.article>
+                            </React.Fragment>
+                        ))}
+                    </div>
+                )}
+            </main>
+
+            <AnimatePresence>
+                {showOnboarding && (
+                    <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+                    >
+                        <motion.div
+                            initial={{ scale: 0.95, y: 15 }}
+                            animate={{ scale: 1, y: 0 }}
+                            exit={{ scale: 0.95, y: 15 }}
+                            className="w-full max-w-lg rounded-2xl border border-white/15 bg-slate-900 p-6"
+                        >
+                            <h2 className="text-xl font-bold text-white mb-2">Complete Profile Setup</h2>
+                            <p className="text-sm text-slate-400 mb-5">
+                                Upload your resume or add details manually once. After this, the app will open directly to the Hackathon Hub feed.
+                            </p>
+                            <div className="flex justify-end gap-2">
+                                <button
+                                    onClick={() => setShowOnboarding(false)}
+                                    className="px-4 py-2 text-sm rounded-lg bg-slate-700 hover:bg-slate-600 text-white"
+                                >
+                                    Later
+                                </button>
+                                <button
+                                    onClick={() => navigate('/profile')}
+                                    className="px-4 py-2 text-sm rounded-lg bg-blue-600 hover:bg-blue-700 text-white"
+                                >
+                                    Setup Now
                                 </button>
                             </div>
-                        )}
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
 
-                        {analyzing && entryMode === 'upload' && (
-                            <div className="py-8 text-center">
-                                <div className="inline-block animate-pulse text-purple-400 font-mono text-sm">
-                                    reading_semantic_depth... <br /> extracting_concepts...
+            <AnimatePresence>
+                {showExpModal && (
+                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+                        <motion.div initial={{ scale: 0.95, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.95, y: 20 }} className="bg-slate-900/95 border border-white/15 p-6 rounded-2xl w-full max-w-lg">
+                            <h3 className="text-xl font-bold text-white mb-1">Post Experience</h3>
+                            <p className="text-sm text-slate-500 mb-5">Share your hackathon journey, issues, and solutions.</p>
+                            <form onSubmit={handlePostExperience} className="space-y-3">
+                                <input type="text" placeholder="Hackathon Name" value={expForm.hackathon_name} onChange={(e) => setExpForm({ ...expForm, hackathon_name: e.target.value })} required className="w-full bg-slate-800 border border-slate-700 rounded-xl p-2.5 text-white text-sm" />
+                                <textarea placeholder="Your journey" value={expForm.journey} onChange={(e) => setExpForm({ ...expForm, journey: e.target.value })} required className="w-full bg-slate-800 border border-slate-700 rounded-xl p-2.5 text-white text-sm h-20" />
+                                <textarea placeholder="Issues you faced" value={expForm.challenges} onChange={(e) => setExpForm({ ...expForm, challenges: e.target.value })} required className="w-full bg-slate-800 border border-slate-700 rounded-xl p-2.5 text-white text-sm h-16" />
+                                <textarea placeholder="How you overcame them" value={expForm.how_overcome} onChange={(e) => setExpForm({ ...expForm, how_overcome: e.target.value })} required className="w-full bg-slate-800 border border-slate-700 rounded-xl p-2.5 text-white text-sm h-16" />
+                                <input type="url" placeholder="Video URL (optional)" value={expForm.video_url} onChange={(e) => setExpForm({ ...expForm, video_url: e.target.value })} className="w-full bg-slate-800 border border-slate-700 rounded-xl p-2.5 text-white text-sm" />
+                                <div className="flex justify-end gap-2">
+                                    <button type="button" onClick={() => setShowExpModal(false)} className="px-4 py-2 bg-slate-700 text-white rounded-lg text-sm">Cancel</button>
+                                    <button type="submit" className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm">Post Experience</button>
                                 </div>
-                            </div>
-                        )}
+                            </form>
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
 
-                        <AnimatePresence>
-                            {/* PREVIEW IS ONLY SHOWN FOR FILE UPLOAD OR AFTER MANUAL SAVE */}
-                            {profileData && entryMode === 'upload' && (
-                                <motion.div
-                                    initial={{ opacity: 0, y: 10 }}
-                                    animate={{ opacity: 1, y: 0 }}
-                                    className="bg-slate-800/40 rounded-xl p-5 border border-white/5"
-                                >
-                                    <div className="flex justify-between items-start mb-3">
-                                        <div>
-                                            <h3 className="text-white font-medium">Analysis Result</h3>
-                                            <p className="text-xs text-purple-300 font-mono mt-1">{profileData.role}</p>
-                                        </div>
-                                        <span className="px-2 py-1 bg-blue-500/20 text-blue-300 text-xs rounded border border-blue-500/30">
-                                            Complexity Score: {profileData.complexity_score}/10
-                                        </span>
-                                    </div>
-
-                                    <p className="text-slate-300 text-sm mb-4 leading-relaxed">{profileData.summary}</p>
-
-                                    <div className="flex flex-wrap gap-2 mb-6">
-                                        {profileData.skills.map((skill, i) => (
-                                            <span key={i} className="px-3 py-1 bg-white/5 text-xs text-slate-300 border border-white/10 rounded-full">
-                                                {skill}
-                                            </span>
-                                        ))}
-                                    </div>
-
-                                    {uploadStatus === 'success' ? (
-                                        <div className="w-full py-2 bg-green-500/20 text-green-400 border border-green-500/30 rounded-lg text-center text-sm font-medium flex justify-center gap-2">
-                                            <CheckCircle size={18} /> Profile Published
-                                        </div>
-                                    ) : (
-                                        <button
-                                            onClick={handleSaveProfile}
-                                            className="w-full py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-all font-medium text-sm"
-                                        >
-                                            Confirm & Publish to Network
-                                        </button>
-                                    )}
-                                </motion.div>
-                            )}
-                        </AnimatePresence>
-                    </div>
-                </section>
-
-                {/* RIGHT PANEL: Semantic Search */}
-                <section>
-                    <h2 className="text-xl font-semibold text-white mb-4 flex items-center gap-2">
-                        <Search className="text-blue-400" size={20} /> Find a Partner
-                    </h2>
-
-                    <div className="bg-slate-900/50 border border-white/10 rounded-2xl p-6 backdrop-blur-sm min-h-[400px]">
-                        <div className="relative mb-6">
-                            <input
-                                type="text"
-                                placeholder="Describe who you need (e.g., 'Expert in PyTorch for medical imaging')"
-                                className="w-full bg-slate-950 border border-white/10 text-white px-4 py-3 pl-11 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-none placeholder-slate-500"
-                                value={searchQuery}
-                                onChange={(e) => setSearchQuery(e.target.value)}
-                                onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-                            />
-                            <Search className="absolute left-3 top-3.5 text-slate-500" size={18} />
-                            <button
-                                onClick={handleSearch}
-                                className="absolute right-2 top-2 px-3 py-1.5 bg-blue-600 text-white text-xs font-bold rounded-lg hover:bg-blue-700"
-                            >
-                                {searching ? '...' : 'Find'}
-                            </button>
-                        </div>
-
-                        <div className="space-y-3">
-                            {searchResults.length === 0 && !searching && (
-                                <div className="text-center text-slate-600 py-10">
-                                    <User className="w-12 h-12 mx-auto mb-2 opacity-20" />
-                                    <p className="text-sm">Enter a query to find semantically matched students.</p>
+            <AnimatePresence>
+                {showEventModal && (
+                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+                        <motion.div initial={{ scale: 0.95, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.95, y: 20 }} className="bg-slate-900/95 border border-white/15 p-6 rounded-2xl w-full max-w-lg">
+                            <h3 className="text-xl font-bold text-white mb-1">Post Hackathon</h3>
+                            <p className="text-sm text-slate-500 mb-5">Post a college hackathon so interested students can participate.</p>
+                            <form onSubmit={handlePostEvent} className="space-y-3">
+                                <input type="text" placeholder="Hackathon Title" value={eventForm.title} onChange={(e) => setEventForm({ ...eventForm, title: e.target.value })} required className="w-full bg-slate-800 border border-slate-700 rounded-xl p-2.5 text-white text-sm" />
+                                <div className="grid grid-cols-2 gap-3">
+                                    <input type="text" placeholder="College Name" value={eventForm.college_name} onChange={(e) => setEventForm({ ...eventForm, college_name: e.target.value })} className="w-full bg-slate-800 border border-slate-700 rounded-xl p-2.5 text-white text-sm" />
+                                    <input type="text" placeholder="Location" value={eventForm.location} onChange={(e) => setEventForm({ ...eventForm, location: e.target.value })} required className="w-full bg-slate-800 border border-slate-700 rounded-xl p-2.5 text-white text-sm" />
                                 </div>
-                            )}
-
-                            {searchResults.map((user) => (
-                                <motion.div
-                                    key={user.user_id}
-                                    initial={{ opacity: 0 }}
-                                    animate={{ opacity: 1 }}
-                                    onClick={() => navigate(`/profile/${user.user_id}`)}
-                                    className="p-4 bg-white/5 hover:bg-white/10 border border-white/5 rounded-xl transition-all group cursor-pointer"
-                                >
-                                    <div className="flex justify-between items-start mb-2">
-                                        <div>
-                                            <h4 className="text-white font-medium group-hover:text-blue-400 transition-colors">{user.name}</h4>
-                                            <p className="text-[10px] text-zinc-500 font-mono">{user.role}</p>
-                                        </div>
-                                        <span className="text-xs font-mono text-green-400 bg-green-400/10 px-2 py-0.5 rounded">
-                                            {(user.score * 100).toFixed(0)}% Match
-                                        </span>
-                                    </div>
-                                    <p className="text-xs text-slate-400 mb-3 line-clamp-2">{user.summary}</p>
-                                    <div className="flex flex-wrap gap-2 mb-2">
-                                        {user.skills.map((skill, i) => (
-                                            <span key={i} className="text-[10px] px-2 py-0.5 bg-slate-800 text-slate-300 rounded border border-slate-700">
-                                                {skill}
-                                            </span>
-                                        ))}
-                                    </div>
-                                    <div className="text-right">
-                                        <span className="text-[10px] text-blue-400 flex items-center justify-end gap-1 opacity-100 md:opacity-0 group-hover:opacity-100 transition-opacity">
-                                            View Profile <User size={10} />
-                                        </span>
-                                    </div>
-                                </motion.div>
-                            ))}
-                        </div>
-                    </div>
-                </section>
-
-            </main>
+                                <textarea placeholder="Description" value={eventForm.description} onChange={(e) => setEventForm({ ...eventForm, description: e.target.value })} required className="w-full bg-slate-800 border border-slate-700 rounded-xl p-2.5 text-white text-sm h-20" />
+                                <input type="date" value={eventForm.date} onChange={(e) => setEventForm({ ...eventForm, date: e.target.value })} required className="w-full bg-slate-800 border border-slate-700 rounded-xl p-2.5 text-white text-sm" />
+                                <input type="url" placeholder="Registration Link (optional)" value={eventForm.registration_link} onChange={(e) => setEventForm({ ...eventForm, registration_link: e.target.value })} className="w-full bg-slate-800 border border-slate-700 rounded-xl p-2.5 text-white text-sm" />
+                                <input type="url" placeholder="Poster URL (optional)" value={eventForm.poster_url} onChange={(e) => setEventForm({ ...eventForm, poster_url: e.target.value })} className="w-full bg-slate-800 border border-slate-700 rounded-xl p-2.5 text-white text-sm" />
+                                <input type="url" placeholder="Video URL (optional)" value={eventForm.video_url} onChange={(e) => setEventForm({ ...eventForm, video_url: e.target.value })} className="w-full bg-slate-800 border border-slate-700 rounded-xl p-2.5 text-white text-sm" />
+                                <div className="flex justify-end gap-2">
+                                    <button type="button" onClick={() => setShowEventModal(false)} className="px-4 py-2 bg-slate-700 text-white rounded-lg text-sm">Cancel</button>
+                                    <button type="submit" className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm">Post Hackathon</button>
+                                </div>
+                            </form>
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
         </div>
     );
 }

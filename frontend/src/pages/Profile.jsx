@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { db } from '../firebaseConfig';
-import { doc, getDoc, collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, getDoc, collection, addDoc, serverTimestamp, setDoc } from 'firebase/firestore';
 import { useParams, useNavigate } from 'react-router-dom';
 import Navbar from '../components/Navbar';
 import { User, Mail, Award, Zap, BookOpen, Briefcase, MapPin, GraduationCap, UserPlus, MessageSquare } from 'lucide-react';
@@ -18,6 +18,13 @@ export default function Profile() {
     const [userData, setUserData] = useState(null);
     const [loading, setLoading] = useState(true);
     const [requestStatus, setRequestStatus] = useState('idle'); // idle, sending, sent, error
+    const [entryMode, setEntryMode] = useState('upload');
+    const [file, setFile] = useState(null);
+    const [analyzing, setAnalyzing] = useState(false);
+    const [profileData, setProfileData] = useState(null);
+    const [embedding, setEmbedding] = useState(null);
+    const [manualData, setManualData] = useState({ role: "", skills: "", summary: "", location: "", phone: "", link: "" });
+    const isOwnProfile = !uid || uid === currentUser?.uid;
 
     const handleConnect = async () => {
         if (!currentUser || !userData) return;
@@ -52,6 +59,78 @@ export default function Profile() {
         }
     };
 
+    const handleAnalyze = async () => {
+        if (!file) return;
+        setAnalyzing(true);
+        const formData = new FormData();
+        formData.append("file", file);
+        try {
+            const res = await axios.post(`${API_URL}/analyze`, formData);
+            setProfileData(res.data.data);
+            setEmbedding(res.data.embedding);
+        } catch (err) {
+            console.error("Analyze failed", err);
+        } finally {
+            setAnalyzing(false);
+        }
+    };
+
+    const handlePublishUpload = async () => {
+        if (!profileData || !currentUser) return;
+        try {
+            const payload = {
+                user_id: currentUser.uid,
+                name: currentUser.displayName,
+                email: currentUser.email,
+                skills: profileData.skills || [],
+                role: profileData.role || "Student",
+                summary: profileData.summary || "",
+                complexity_score: profileData.complexity_score || 5,
+                projects: profileData.projects || [],
+                education: profileData.education || [],
+                location: profileData.location || "Unknown",
+                embedding: embedding || []
+            };
+            await setDoc(doc(db, "users", currentUser.uid), payload, { merge: true });
+            setUserData((prev) => ({ ...(prev || {}), ...payload }));
+            alert("Profile updated successfully.");
+        } catch (err) {
+            console.error("Upload publish failed", err);
+        }
+    };
+
+    const handleManualSave = async () => {
+        if (!manualData.role || !manualData.summary) {
+            alert("Please fill role and summary.");
+            return;
+        }
+        setAnalyzing(true);
+        try {
+            const textToEmbed = `${manualData.summary} ${manualData.skills}`;
+            const res = await axios.post(`${API_URL}/vectorize`, { query_text: textToEmbed, limit: 1 });
+            const payload = {
+                user_id: currentUser.uid,
+                name: currentUser.displayName,
+                email: currentUser.email,
+                skills: manualData.skills.split(',').map((s) => s.trim()).filter(Boolean),
+                role: manualData.role,
+                summary: manualData.summary,
+                location: manualData.location || "Unknown",
+                phone: manualData.phone || "",
+                social_links: { github_or_link: manualData.link || "" },
+                complexity_score: userData?.complexity_score || 5,
+                embedding: res.data.embedding || []
+            };
+            await setDoc(doc(db, "users", currentUser.uid), payload, { merge: true });
+            setUserData((prev) => ({ ...(prev || {}), ...payload }));
+            alert("Profile updated successfully.");
+        } catch (err) {
+            console.error("Manual save failed", err);
+        } finally {
+            setAnalyzing(false);
+        }
+    };
+
 
     useEffect(() => {
         const fetchUserData = async () => {
@@ -63,7 +142,18 @@ export default function Profile() {
                     const docSnap = await getDoc(docRef);
 
                     if (docSnap.exists()) {
-                        setUserData(docSnap.data());
+                        const data = docSnap.data();
+                        setUserData(data);
+                        if (targetUid === currentUser?.uid) {
+                            setManualData({
+                                role: data.role || "",
+                                skills: Array.isArray(data.skills) ? data.skills.join(', ') : (data.skills || ""),
+                                summary: data.summary || "",
+                                location: data.location || "",
+                                phone: data.phone || "",
+                                link: data?.social_links?.github_or_link || data?.social_links?.linkedin || ""
+                            });
+                        }
                     } else {
                         console.log("No such document!");
                     }
@@ -101,10 +191,58 @@ export default function Profile() {
     }
 
     return (
-        <div className="min-h-screen bg-slate-950 text-slate-300">
+        <div className="min-h-screen bg-slate-950 text-slate-300 md:pl-72">
             <Navbar />
 
             <main className="max-w-4xl mx-auto px-6 py-12">
+                {isOwnProfile && (
+                    <div className="bg-slate-900/50 border border-white/10 rounded-2xl p-6 backdrop-blur-sm mb-8">
+                        <h2 className="text-xl font-semibold text-white mb-4">Update Your Resume/Profile</h2>
+                        <div className="flex gap-2 mb-4 bg-slate-950 p-1 rounded-lg border border-white/10 w-fit">
+                            <button onClick={() => setEntryMode('upload')} className={`px-4 py-1.5 text-sm rounded-md ${entryMode === 'upload' ? 'bg-blue-600 text-white' : 'text-slate-400'}`}>
+                                Upload Resume
+                            </button>
+                            <button onClick={() => setEntryMode('manual')} className={`px-4 py-1.5 text-sm rounded-md ${entryMode === 'manual' ? 'bg-blue-600 text-white' : 'text-slate-400'}`}>
+                                Manual Edit
+                            </button>
+                        </div>
+
+                        {entryMode === 'upload' ? (
+                            <div>
+                                <p className="text-sm text-slate-400 mb-3">Upload resume/project document to refresh your profile.</p>
+                                <div className="flex gap-3 mb-4">
+                                    <input type="file" onChange={(e) => setFile(e.target.files[0])} className="block w-full text-sm text-slate-400 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:bg-blue-600 file:text-white bg-slate-950/50 rounded-lg border border-white/10" />
+                                    <button onClick={handleAnalyze} disabled={!file || analyzing} className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm disabled:opacity-50">
+                                        {analyzing ? "Analyzing..." : "Analyze"}
+                                    </button>
+                                </div>
+                                {profileData && (
+                                    <div className="rounded-xl border border-white/10 bg-slate-800/40 p-4">
+                                        <p className="text-sm text-white font-semibold mb-1">{profileData.role}</p>
+                                        <p className="text-xs text-slate-300 mb-3">{profileData.summary}</p>
+                                        <button onClick={handlePublishUpload} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-sm">
+                                            Publish Updated Profile
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+                        ) : (
+                            <div className="space-y-3">
+                                <input type="text" value={manualData.role} onChange={(e) => setManualData({ ...manualData, role: e.target.value })} placeholder="Role / Focus" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm" />
+                                <input type="text" value={manualData.skills} onChange={(e) => setManualData({ ...manualData, skills: e.target.value })} placeholder="Skills (comma separated)" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm" />
+                                <textarea value={manualData.summary} onChange={(e) => setManualData({ ...manualData, summary: e.target.value })} placeholder="Summary" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm h-24" />
+                                <div className="grid grid-cols-2 gap-3">
+                                    <input type="text" value={manualData.location} onChange={(e) => setManualData({ ...manualData, location: e.target.value })} placeholder="Location" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm" />
+                                    <input type="text" value={manualData.link} onChange={(e) => setManualData({ ...manualData, link: e.target.value })} placeholder="GitHub / Portfolio Link" className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm" />
+                                </div>
+                                <button onClick={handleManualSave} disabled={analyzing} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-sm disabled:opacity-50">
+                                    {analyzing ? "Saving..." : "Save Changes"}
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                )}
+
                 <div className="bg-slate-900/50 border border-white/10 rounded-2xl p-8 backdrop-blur-sm">
                     {/* Header */}
                     <div className="flex flex-col md:flex-row items-center md:items-start gap-6 mb-8 border-b border-white/5 pb-8">
