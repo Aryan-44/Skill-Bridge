@@ -1,7 +1,7 @@
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from services.gemini_service import analyze_document
 from firebase_config import db
-from models.schemas import UserProfile
+from models import UserProfile
 
 router = APIRouter()
 

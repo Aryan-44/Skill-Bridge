@@ -18,6 +18,10 @@ class SearchQuery(BaseModel):
     query_text: str
     limit: Optional[int] = 5
 
+class SearchRequest(BaseModel):
+    query: str
+    limit: int = 3
+
 class ChatRequest(BaseModel):
     message: str
     history: List[dict] = [] # List of {role: "user"|"model", parts: ["msg"]}
