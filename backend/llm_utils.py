@@ -27,6 +27,8 @@ client = OpenAI(
     base_url=base_url
 )
 
+import time
+
 def get_hf_embedding(text: str):
     """Generates embedding using Hugging Face Inference API (Free & Lightweight)."""
     if not text or not hf_api_key:
@@ -35,14 +37,25 @@ def get_hf_embedding(text: str):
     
     try:
         payload = {"inputs": text}
-        response = requests.post(HF_API_URL, headers=hf_headers, json=payload, timeout=10)
+        for attempt in range(3):
+            response = requests.post(HF_API_URL, headers=hf_headers, json=payload, timeout=20)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if isinstance(data, list):
+                    if len(data) > 0 and isinstance(data[0], list):
+                        return data[0]
+                    return data
+                return []
+            elif response.status_code == 503:
+                print(f"HF API 503 - Model is loading, waiting 5s (Attempt {attempt+1}/3)")
+                time.sleep(5)
+                continue
+            else:
+                print(f"HF API Error {response.status_code}: {response.text}")
+                return []
         
-        if response.status_code == 200:
-            # HF API returns a list of embeddings (we sent 1 input)
-            return response.json() 
-        else:
-            print(f"HF API Error {response.status_code}: {response.text}")
-            return []
+        return []
             
     except Exception as e:
         print(f"Embedding Network Error: {e}")
