@@ -48,23 +48,28 @@ export default function Dashboard() {
                 const myConnections = myProfile?.connected_users || [];
                 setConnectedUserIds(myConnections);
 
-                const [expRes, eventRes] = await Promise.all([
-                    axios.get(`${API_URL}/community/experiences`),
-                    axios.get(`${API_URL}/community/events`)
-                ]);
+                let mixed = [];
+                try {
+                    const [expRes, eventRes] = await Promise.all([
+                        axios.get(`${API_URL}/community/experiences`),
+                        axios.get(`${API_URL}/community/events`)
+                    ]);
 
-                const experiences = (expRes.data || []).map((item) => ({
-                    ...item,
-                    itemType: "experience",
-                    feedTs: new Date(item.timestamp || 0).getTime()
-                }));
-                const events = (eventRes.data || []).map((item) => ({
-                    ...item,
-                    itemType: "event",
-                    feedTs: new Date(item.timestamp || 0).getTime()
-                }));
+                    const experiences = (expRes.data || []).map((item) => ({
+                        ...item,
+                        itemType: "experience",
+                        feedTs: new Date(item.timestamp || 0).getTime()
+                    }));
+                    const events = (eventRes.data || []).map((item) => ({
+                        ...item,
+                        itemType: "event",
+                        feedTs: new Date(item.timestamp || 0).getTime()
+                    }));
 
-                const mixed = [...experiences, ...events].sort((a, b) => b.feedTs - a.feedTs);
+                    mixed = [...experiences, ...events].sort((a, b) => b.feedTs - a.feedTs);
+                } catch (apiErr) {
+                    console.warn("Could not load community feed from backend (is it running?):", apiErr);
+                }
                 setFeedItems(mixed);
 
                 const usersSnap = await getDocs(collection(db, "users"));
