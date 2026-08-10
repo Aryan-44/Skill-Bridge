@@ -30,6 +30,8 @@ export default function Dashboard() {
     const [expForm, setExpForm] = useState({ hackathon_name: '', journey: '', challenges: '', how_overcome: '', tips: '', video_url: '' });
     const [eventForm, setEventForm] = useState({ title: '', college_name: '', event_type: 'Hackathon', description: '', date: '', location: '', registration_link: '', poster_url: '', video_url: '', contact_note: '' });
 
+    const [isProfileComplete, setIsProfileComplete] = useState(false);
+
     useEffect(() => {
         const loadHubData = async () => {
             if (!currentUser) return;
@@ -40,6 +42,7 @@ export default function Dashboard() {
                     setShowOnboarding(true);
                 }
                 const myProfile = profileSnap.exists() ? profileSnap.data() : {};
+                setIsProfileComplete(!!myProfile?.role || !!myProfile?.skills);
                 const myConnections = myProfile?.connected_users || [];
                 setConnectedUserIds(myConnections);
 
@@ -64,7 +67,10 @@ export default function Dashboard() {
 
                 const usersSnap = await getDocs(collection(db, "users"));
                 const usersList = [];
-                usersSnap.forEach((d) => usersList.push(d.data()));
+                usersSnap.forEach((d) => {
+                    const data = d.data();
+                    usersList.push({ ...data, user_id: data.user_id || d.id });
+                });
                 setAllUsers(usersList);
                 const reqSnap = await getDocs(collection(db, "requests"));
                 const allReqs = reqSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
@@ -344,8 +350,10 @@ export default function Dashboard() {
                     <p className="text-xs uppercase tracking-wider text-blue-300 mb-3 flex items-center gap-1">
                         <UserPlus size={13} /> Recommended for You
                     </p>
-                    {suggestedUsers.length === 0 ? (
+                    {!isProfileComplete ? (
                         <p className="text-xs text-slate-400">Complete your profile to get teammate suggestions.</p>
+                    ) : suggestedUsers.length === 0 ? (
+                        <p className="text-xs text-slate-400">No teammate suggestions available yet.</p>
                     ) : (
                         <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-thin scrollbar-thumb-white/10">
                             {suggestedUsers.map((u) => (
