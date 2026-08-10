@@ -32,6 +32,8 @@ export default function Dashboard() {
 
     const [isProfileComplete, setIsProfileComplete] = useState(false);
 
+    const [hasSearched, setHasSearched] = useState(false);
+
     useEffect(() => {
         const loadHubData = async () => {
             if (!currentUser) return;
@@ -239,9 +241,11 @@ export default function Dashboard() {
         if (!searchQuery.trim()) {
             setSearchResults([]);
             setIsSearching(false);
+            setHasSearched(false);
             return;
         }
         setIsSearching(true);
+        setHasSearched(true);
         try {
             const res = await axios.post(`${API_URL}/vectorize`, { query_text: searchQuery });
             const queryVec = res.data.embedding;
@@ -261,6 +265,7 @@ export default function Dashboard() {
             }
         } catch (err) {
             console.error("Search failed", err);
+            setSearchResults([]);
         } finally {
             setIsSearching(false);
         }
@@ -271,40 +276,31 @@ export default function Dashboard() {
             <Navbar />
 
             <main className="max-w-6xl mx-auto px-6 py-8">
-                <section className="mb-8 rounded-2xl border border-cyan-400/20 bg-gradient-to-r from-cyan-500/10 via-blue-500/10 to-purple-500/10 p-6">
-                    <div className="flex flex-col gap-3 md:flex-row md:justify-between md:items-end">
-                        <div>
-                            <p className="text-xs uppercase tracking-[0.25em] text-cyan-300 mb-2">Community Hub</p>
-                            <h1 className="text-2xl md:text-3xl font-semibold text-white">Campus Posts, Experiences, and Hackathon Updates</h1>
-                            
-                            <form onSubmit={handleSearch} className="mt-4 relative max-w-md group">
-                                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-cyan-400 transition-colors" size={18} />
-                                <input 
-                                    type="text" 
-                                    placeholder="Search users by skills (e.g. 'React developer')..." 
-                                    value={searchQuery}
-                                    onChange={(e) => setSearchQuery(e.target.value)}
-                                    className="w-full bg-slate-950/50 border border-white/10 rounded-xl py-2.5 pl-10 pr-4 text-sm text-white focus:outline-none focus:border-cyan-500/50 transition-all backdrop-blur-md"
-                                />
-                                {isSearching && <div className="absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-cyan-500">⏳</div>}
-                            </form>
-                        </div>
-                        <div className="flex gap-2">
-                            <button
-                                onClick={() => setShowExpModal(true)}
-                                className="w-fit rounded-xl bg-emerald-600 hover:bg-emerald-700 px-4 py-2 text-sm text-white font-medium"
-                            >
-                                Post Experience
-                            </button>
-                            <button
-                                onClick={() => setShowEventModal(true)}
-                                className="w-fit rounded-xl bg-blue-600 hover:bg-blue-700 px-4 py-2 text-sm text-white font-medium"
-                            >
-                                Post Hackathon
-                            </button>
-                        </div>
-                    </div>
+                {/* Search Bar Section */}
+                <section className="mb-6 rounded-2xl border border-white/10 bg-slate-900/40 p-4">
+                    <form onSubmit={handleSearch} className="relative w-full group">
+                        <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-cyan-400 transition-colors" size={20} />
+                        <input 
+                            type="text" 
+                            placeholder="Search teammates by skills, role, or keywords (e.g. 'React developer')..." 
+                            value={searchQuery}
+                            onChange={(e) => {setSearchQuery(e.target.value); if(e.target.value === '') { setHasSearched(false); setSearchResults([]); }}}
+                            className="w-full bg-slate-950/80 border border-white/10 rounded-xl py-3 pl-12 pr-4 text-sm text-white focus:outline-none focus:border-cyan-500/50 transition-all backdrop-blur-md shadow-inner"
+                        />
+                        {isSearching && <div className="absolute right-4 top-1/2 -translate-y-1/2 animate-spin text-cyan-500">⏳</div>}
+                    </form>
                 </section>
+
+                {/* Empty Search Results */}
+                {hasSearched && !isSearching && searchResults.length === 0 && (
+                    <section className="mb-6 animate-in fade-in slide-in-from-top-4 duration-500">
+                        <div className="text-center py-8 border border-white/10 rounded-2xl bg-slate-900/40">
+                            <Search className="mx-auto mb-3 text-slate-500" size={24} />
+                            <p className="text-sm text-slate-400">No teammates found for "{searchQuery}". Try different keywords.</p>
+                            <button onClick={() => {setSearchQuery(''); setHasSearched(false);}} className="text-xs text-blue-400 mt-2 hover:underline">Clear Search</button>
+                        </div>
+                    </section>
+                )}
 
                 {/* Search Results */}
                 {searchResults.length > 0 && (
@@ -313,7 +309,7 @@ export default function Dashboard() {
                             <h2 className="text-lg font-bold text-white flex items-center gap-2">
                                 <Sparkles className="text-cyan-400" size={18} /> Semantic Matches
                             </h2>
-                            <button onClick={() => {setSearchResults([]); setSearchQuery('');}} className="text-xs text-slate-500 hover:text-white">Clear Results</button>
+                            <button onClick={() => {setSearchResults([]); setSearchQuery(''); setHasSearched(false);}} className="text-xs text-slate-500 hover:text-white">Clear Results</button>
                         </div>
                         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
                             {searchResults.map((u) => (
@@ -344,6 +340,29 @@ export default function Dashboard() {
                         </div>
                     </section>
                 )}
+
+                <section className="mb-8 rounded-2xl border border-cyan-400/20 bg-gradient-to-r from-cyan-500/10 via-blue-500/10 to-purple-500/10 p-6">
+                    <div className="flex flex-col gap-3 md:flex-row md:justify-between md:items-end">
+                        <div>
+                            <p className="text-xs uppercase tracking-[0.25em] text-cyan-300 mb-2">Community Hub</p>
+                            <h1 className="text-2xl md:text-3xl font-semibold text-white">Campus Posts, Experiences, and Hackathon Updates</h1>
+                        </div>
+                        <div className="flex gap-2">
+                            <button
+                                onClick={() => setShowExpModal(true)}
+                                className="w-fit rounded-xl bg-emerald-600 hover:bg-emerald-700 px-4 py-2 text-sm text-white font-medium"
+                            >
+                                Post Experience
+                            </button>
+                            <button
+                                onClick={() => setShowEventModal(true)}
+                                className="w-fit rounded-xl bg-blue-600 hover:bg-blue-700 px-4 py-2 text-sm text-white font-medium"
+                            >
+                                Post Hackathon
+                            </button>
+                        </div>
+                    </div>
+                </section>
 
                 {/* Always Visible Suggestions */}
                 <section className="mb-8 rounded-2xl border border-blue-500/20 bg-blue-500/10 p-4">
